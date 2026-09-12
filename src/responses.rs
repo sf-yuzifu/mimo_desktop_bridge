@@ -107,9 +107,9 @@ pub async fn responses(State(state): State<Arc<BridgeState>>, body: String) -> R
         }
     };
     if let (Some(p), Some(c)) = (
-        chat.pointer("/usage/prompt_tokens").and_then(|v| v.as_u64()),
-        chat
-            .pointer("/usage/completion_tokens")
+        chat.pointer("/usage/prompt_tokens")
+            .and_then(|v| v.as_u64()),
+        chat.pointer("/usage/completion_tokens")
             .and_then(|v| v.as_u64()),
     ) {
         state.usage.record(&model, p, c, false);
@@ -170,6 +170,7 @@ async fn responses_stream_from_chat(
             }
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn resp_event(
             typ: &str,
             seq: i64,
@@ -275,10 +276,7 @@ async fn responses_stream_from_chat(
                 return;
             };
             buffer.extend_from_slice(&chunk);
-            loop {
-                let Some(line) = crate::upstream::take_sse_line(&mut buffer) else {
-                    break;
-                };
+            while let Some(line) = crate::upstream::take_sse_line(&mut buffer) {
                 let line = line.trim().to_string();
                 if line.is_empty() {
                     continue;
@@ -566,14 +564,13 @@ pub fn responses_to_chat_body(body: &Value, stream: bool) -> Value {
     let mut out = serde_json::Map::new();
     out.insert(
         "model".into(),
-        body.get("model").cloned().unwrap_or_else(|| json!("mimo-flash")),
+        body.get("model")
+            .cloned()
+            .unwrap_or_else(|| json!("mimo-flash")),
     );
     out.insert("stream".into(), Value::Bool(stream));
     if stream {
-        out.insert(
-            "stream_options".into(),
-            json!({ "include_usage": true }),
-        );
+        out.insert("stream_options".into(), json!({ "include_usage": true }));
     }
     if let Some(v) = body.get("temperature") {
         out.insert("temperature".into(), v.clone());
@@ -595,7 +592,10 @@ pub fn responses_to_chat_body(body: &Value, stream: bool) -> Value {
     if let Some(instructions) = body.get("instructions") {
         let text = match instructions {
             Value::String(s) => Some(s.clone()),
-            other => other.get("text").and_then(|t| t.as_str()).map(|s| s.to_string()),
+            other => other
+                .get("text")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string()),
         };
         if let Some(text) = text {
             messages.push(json!({ "role": "system", "content": text }));
@@ -637,10 +637,7 @@ fn message_from_input_item(item: &Value) -> Option<Value> {
             .map(|text| json!({ "role": "user", "content": text }));
     }
     if typ == Some("message") || obj.contains_key("role") {
-        let role = obj
-            .get("role")
-            .and_then(|v| v.as_str())
-            .unwrap_or("user");
+        let role = obj.get("role").and_then(|v| v.as_str()).unwrap_or("user");
         let content = match obj.get("content") {
             Some(Value::String(s)) => s.clone(),
             Some(Value::Array(parts)) => parts

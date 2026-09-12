@@ -35,8 +35,7 @@ impl BridgeState {
         tokio::spawn({
             let usage = usage.clone();
             async move {
-                let mut tick =
-                    tokio::time::interval(std::time::Duration::from_secs(5));
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     tick.tick().await;

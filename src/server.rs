@@ -63,7 +63,9 @@ impl HttpServer {
 }
 
 /// Resolve TLS config: user PEM if provided, else cached self-signed cert.
-async fn load_or_make_tls(state: &Arc<BridgeState>) -> Result<axum_server::tls_rustls::RustlsConfig> {
+async fn load_or_make_tls(
+    state: &Arc<BridgeState>,
+) -> Result<axum_server::tls_rustls::RustlsConfig> {
     let settings = state.storage.settings();
     if let (Some(cert), Some(key)) = (
         settings.tls_cert_path.clone(),
@@ -146,8 +148,7 @@ pub async fn start_http(state: Arc<BridgeState>, config: ServerConfig) -> Result
         })
     } else {
         tokio::spawn(async move {
-            let listener = tokio::net::TcpListener::from_std(std_listener)
-                .expect("tokio listener");
+            let listener = tokio::net::TcpListener::from_std(std_listener).expect("tokio listener");
             if let Err(e) = axum::serve(listener, make_service).await {
                 tracing::error!(target = "server", "http server failed: {e}");
             }
@@ -261,10 +262,7 @@ pub fn router(state: Arc<BridgeState>) -> Router {
         )
         .route("/api/settings/port", post(api_set_port))
         .route("/api/usage", get(api_usage))
-        .route(
-            "/api/settings/tls",
-            get(api_tls_get).post(api_tls_set),
-        )
+        .route("/api/settings/tls", get(api_tls_get).post(api_tls_set))
         .route("/api/logs", get(api_logs))
         .route("/api/logs/stream", get(api_logs_stream))
         .route_layer(axum::middleware::from_fn_with_state(
@@ -397,11 +395,7 @@ async fn static_asset(
                 f.data.into_owned(),
             )
                 .into_response(),
-            None => (
-                StatusCode::UNAUTHORIZED,
-                "admin session required",
-            )
-                .into_response(),
+            None => (StatusCode::UNAUTHORIZED, "admin session required").into_response(),
         };
     }
 
@@ -410,11 +404,7 @@ async fn static_asset(
             let mime = mime_guess::from_path(path)
                 .first_or_octet_stream()
                 .to_string();
-            (
-                [(header::CONTENT_TYPE, mime)],
-                f.data.into_owned(),
-            )
-                .into_response()
+            ([(header::CONTENT_TYPE, mime)], f.data.into_owned()).into_response()
         }
         None => {
             // SPA fallback
@@ -582,10 +572,7 @@ async fn api_models() -> Response {
     .into_response()
 }
 
-async fn api_admin_session(
-    State(state): State<Arc<BridgeState>>,
-    headers: HeaderMap,
-) -> Response {
+async fn api_admin_session(State(state): State<Arc<BridgeState>>, headers: HeaderMap) -> Response {
     let configured = state.storage.admin_configured();
     let authed = admin_ok(&state, &headers);
     Json(json!({
@@ -623,7 +610,10 @@ async fn api_admin_setup(
     }
     let tok = issue_admin_session(&state);
     (
-        [(header::SET_COOKIE, format!("mdb_session={tok}; Path=/; HttpOnly; SameSite=Lax"))],
+        [(
+            header::SET_COOKIE,
+            format!("mdb_session={tok}; Path=/; HttpOnly; SameSite=Lax"),
+        )],
         Json(json!({ "ok": true })),
     )
         .into_response()
@@ -638,16 +628,16 @@ async fn api_admin_login(
     }
     let tok = issue_admin_session(&state);
     (
-        [(header::SET_COOKIE, format!("mdb_session={tok}; Path=/; HttpOnly; SameSite=Lax"))],
+        [(
+            header::SET_COOKIE,
+            format!("mdb_session={tok}; Path=/; HttpOnly; SameSite=Lax"),
+        )],
         Json(json!({ "ok": true })),
     )
         .into_response()
 }
 
-async fn api_admin_logout(
-    State(state): State<Arc<BridgeState>>,
-    headers: HeaderMap,
-) -> Response {
+async fn api_admin_logout(State(state): State<Arc<BridgeState>>, headers: HeaderMap) -> Response {
     if let Some(tok) = session_cookie(&headers) {
         revoke_admin_session(&state, &tok);
     }
@@ -670,10 +660,18 @@ async fn api_admin_password(
     Json(body): Json<ChangePasswordBody>,
 ) -> Response {
     if !admin_ok(&state, &headers) {
-        return err_json(StatusCode::UNAUTHORIZED, "admin session required", "unauthorized");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "admin session required",
+            "unauthorized",
+        );
     }
     if !state.storage.verify_admin_password(&body.old_password) {
-        return err_json(StatusCode::UNAUTHORIZED, "old password is incorrect", "unauthorized");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "old password is incorrect",
+            "unauthorized",
+        );
     }
     if body.new_password.len() < 6 {
         return err_json(
@@ -691,18 +689,22 @@ async fn api_admin_password(
     }
     let tok = issue_admin_session(&state);
     (
-        [(header::SET_COOKIE, format!("mdb_session={tok}; Path=/; HttpOnly; SameSite=Lax"))],
+        [(
+            header::SET_COOKIE,
+            format!("mdb_session={tok}; Path=/; HttpOnly; SameSite=Lax"),
+        )],
         Json(json!({ "ok": true })),
     )
         .into_response()
 }
 
-async fn api_keys_list(
-    State(state): State<Arc<BridgeState>>,
-    headers: HeaderMap,
-) -> Response {
+async fn api_keys_list(State(state): State<Arc<BridgeState>>, headers: HeaderMap) -> Response {
     if !admin_ok(&state, &headers) {
-        return err_json(StatusCode::UNAUTHORIZED, "admin session required", "unauthorized");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "admin session required",
+            "unauthorized",
+        );
     }
     Json(json!({ "keys": state.storage.list_keys() })).into_response()
 }
@@ -719,7 +721,11 @@ async fn api_keys_create(
     Json(body): Json<CreateKeyBody>,
 ) -> Response {
     if !admin_ok(&state, &headers) {
-        return err_json(StatusCode::UNAUTHORIZED, "admin session required", "unauthorized");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "admin session required",
+            "unauthorized",
+        );
     }
     match state.storage.create_api_key(&body.label) {
         Ok((id, token)) => Json(json!({
@@ -738,7 +744,11 @@ async fn api_keys_delete(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Response {
     if !admin_ok(&state, &headers) {
-        return err_json(StatusCode::UNAUTHORIZED, "admin session required", "unauthorized");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "admin session required",
+            "unauthorized",
+        );
     }
     match state.storage.delete_api_key(&id) {
         Ok(true) => Json(json!({ "ok": true })).into_response(),
@@ -752,7 +762,11 @@ async fn api_key_required_get(
     headers: HeaderMap,
 ) -> Response {
     if !admin_ok(&state, &headers) {
-        return err_json(StatusCode::UNAUTHORIZED, "admin session required", "unauthorized");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "admin session required",
+            "unauthorized",
+        );
     }
     Json(json!({ "required": state.storage.settings().api_key_required })).into_response()
 }
@@ -768,7 +782,11 @@ async fn api_key_required_set(
     Json(body): Json<BoolBody>,
 ) -> Response {
     if !admin_ok(&state, &headers) {
-        return err_json(StatusCode::UNAUTHORIZED, "admin session required", "unauthorized");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "admin session required",
+            "unauthorized",
+        );
     }
     match state.storage.set_api_key_required(body.required) {
         Ok(()) => Json(json!({ "ok": true, "required": body.required })).into_response(),
@@ -787,10 +805,18 @@ async fn api_set_port(
     Json(body): Json<PortBody>,
 ) -> Response {
     if !admin_ok(&state, &headers) {
-        return err_json(StatusCode::UNAUTHORIZED, "admin session required", "unauthorized");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "admin session required",
+            "unauthorized",
+        );
     }
     if body.port < 1024 {
-        return err_json(StatusCode::BAD_REQUEST, "port must be >= 1024", "bad_request");
+        return err_json(
+            StatusCode::BAD_REQUEST,
+            "port must be >= 1024",
+            "bad_request",
+        );
     }
     match state.storage.set_port(body.port) {
         Ok(()) => Json(json!({
@@ -812,12 +838,13 @@ async fn api_usage(State(state): State<Arc<BridgeState>>) -> Response {
     .into_response()
 }
 
-async fn api_tls_get(
-    State(state): State<Arc<BridgeState>>,
-    headers: HeaderMap,
-) -> Response {
+async fn api_tls_get(State(state): State<Arc<BridgeState>>, headers: HeaderMap) -> Response {
     if !admin_ok(&state, &headers) {
-        return err_json(StatusCode::UNAUTHORIZED, "admin session required", "unauthorized");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "admin session required",
+            "unauthorized",
+        );
     }
     let s = state.storage.settings();
     Json(json!({
@@ -840,7 +867,11 @@ async fn api_tls_set(
     Json(body): Json<TlsBody>,
 ) -> Response {
     if !admin_ok(&state, &headers) {
-        return err_json(StatusCode::UNAUTHORIZED, "admin session required", "unauthorized");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "admin session required",
+            "unauthorized",
+        );
     }
     match state.storage.set_tls_enabled(body.enabled) {
         Ok(()) => Json(json!({
@@ -860,7 +891,9 @@ async fn api_logs(State(state): State<Arc<BridgeState>>) -> Response {
 async fn api_logs_stream(
     State(state): State<Arc<BridgeState>>,
 ) -> axum::response::Sse<
-    impl futures_util::Stream<Item = std::result::Result<axum::response::sse::Event, std::convert::Infallible>>,
+    impl futures_util::Stream<
+        Item = std::result::Result<axum::response::sse::Event, std::convert::Infallible>,
+    >,
 > {
     use axum::response::sse::{Event, KeepAlive, Sse};
     let rx = state.logs.subscribe();

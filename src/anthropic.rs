@@ -132,6 +132,8 @@ pub fn anthropic_to_openai(body: &Value) -> Result<Value, String> {
     Ok(out)
 }
 
+// axum Response is inherently large; boxing buys nothing here.
+#[allow(clippy::result_large_err)]
 async fn call_upstream(
     state: &Arc<BridgeState>,
     openai_body: &Value,
@@ -214,17 +216,7 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
             model2,
             state2,
         ),
-        |(
-            mut up,
-            mut buf,
-            mut prompt_toks,
-            mut comp_toks,
-            mut done,
-            mid,
-            thinking,
-            model,
-            st,
-        )| async move {
+        |(mut up, mut buf, mut prompt_toks, mut comp_toks, mut done, mid, thinking, model, st)| async move {
             if done {
                 return None;
             }
@@ -252,7 +244,17 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
                         done = true;
                         return Some((
                             Ok::<Bytes, std::io::Error>(Bytes::from(events)),
-                            (up, buf, prompt_toks, comp_toks, done, mid, thinking, model, st),
+                            (
+                                up,
+                                buf,
+                                prompt_toks,
+                                comp_toks,
+                                done,
+                                mid,
+                                thinking,
+                                model,
+                                st,
+                            ),
                         ));
                     }
                     let Ok(v) = serde_json::from_str::<Value>(data) else {
@@ -279,10 +281,7 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
                         .map(|s| s.to_string());
 
                     let mut events = String::new();
-                    let content = delta
-                        .get("content")
-                        .and_then(|c| c.as_str())
-                        .unwrap_or("");
+                    let content = delta.get("content").and_then(|c| c.as_str()).unwrap_or("");
                     if !content.is_empty() {
                         comp_toks = comp_toks.max(content.chars().count() as u64 / 4);
                         events.push_str(&format!(
@@ -324,7 +323,17 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
                         done = true;
                         return Some((
                             Ok(Bytes::from(events)),
-                            (up, buf, prompt_toks, comp_toks, done, mid, thinking, model, st),
+                            (
+                                up,
+                                buf,
+                                prompt_toks,
+                                comp_toks,
+                                done,
+                                mid,
+                                thinking,
+                                model,
+                                st,
+                            ),
                         ));
                     }
                     if events.is_empty() {
@@ -332,7 +341,17 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
                     }
                     return Some((
                         Ok(Bytes::from(events)),
-                        (up, buf, prompt_toks, comp_toks, done, mid, thinking, model, st),
+                        (
+                            up,
+                            buf,
+                            prompt_toks,
+                            comp_toks,
+                            done,
+                            mid,
+                            thinking,
+                            model,
+                            st,
+                        ),
                     ));
                 }
                 match up.next().await {
@@ -342,7 +361,17 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
                         done = true;
                         return Some((
                             Err(std::io::Error::other(e.to_string())),
-                            (up, buf, prompt_toks, comp_toks, done, mid, thinking, model, st),
+                            (
+                                up,
+                                buf,
+                                prompt_toks,
+                                comp_toks,
+                                done,
+                                mid,
+                                thinking,
+                                model,
+                                st,
+                            ),
                         ));
                     }
                     None => {
@@ -355,7 +384,17 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
                             );
                             return Some((
                                 Ok(Bytes::from(ev)),
-                                (up, buf, prompt_toks, comp_toks, done, mid, thinking, model, st),
+                                (
+                                    up,
+                                    buf,
+                                    prompt_toks,
+                                    comp_toks,
+                                    done,
+                                    mid,
+                                    thinking,
+                                    model,
+                                    st,
+                                ),
                             ));
                         }
                         return None;
@@ -409,7 +448,11 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
     let mut collected = String::new();
     while let Some(item) = s.next().await {
         let Ok(bytes) = item else {
-            return anth_err(StatusCode::BAD_GATEWAY, "upstream stream error", "api_error");
+            return anth_err(
+                StatusCode::BAD_GATEWAY,
+                "upstream stream error",
+                "api_error",
+            );
         };
         collected.push_str(&String::from_utf8_lossy(&bytes));
     }
@@ -561,6 +604,9 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(out["messages"][0]["role"], "tool");
-        assert!(out["messages"][0]["content"].as_str().unwrap().contains("ok"));
+        assert!(out["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("ok"));
     }
 }

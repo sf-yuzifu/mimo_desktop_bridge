@@ -22,7 +22,10 @@ const PROACTIVE_REFRESH_AGE_MS: i64 = 24 * 3600 * 1000;
 /// POST a chat-completions payload to the MiMo free channel.
 ///
 /// On 401, performs one single-flight token refresh and retries once.
-pub async fn send_chat(state: &Arc<BridgeState>, payload: &Value) -> Result<reqwest::Response, SendError> {
+pub async fn send_chat(
+    state: &Arc<BridgeState>,
+    payload: &Value,
+) -> Result<reqwest::Response, SendError> {
     let mut session = match state.storage.session() {
         Some(s) if s.is_authenticated() => s,
         _ => return Err(SendError::NotLoggedIn),

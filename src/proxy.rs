@@ -136,7 +136,11 @@ pub async fn chat(State(state): State<Arc<BridgeState>>, body: String) -> Respon
         }));
         return error_response(
             status,
-            &format!("upstream {}: {}", status.as_u16(), text.chars().take(400).collect::<String>()),
+            &format!(
+                "upstream {}: {}",
+                status.as_u16(),
+                text.chars().take(400).collect::<String>()
+            ),
             "api_error",
         );
     }
@@ -153,9 +157,9 @@ pub async fn chat(State(state): State<Arc<BridgeState>>, body: String) -> Respon
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
-        content_type.parse().unwrap_or_else(|_| {
-            header::HeaderValue::from_static("application/json")
-        }),
+        content_type
+            .parse()
+            .unwrap_or_else(|_| header::HeaderValue::from_static("application/json")),
     );
     if stream {
         headers.insert(
@@ -171,7 +175,14 @@ pub async fn chat(State(state): State<Arc<BridgeState>>, body: String) -> Respon
     let model_for_usage = payload_model.clone();
     let upstream = resp.bytes_stream();
     let counted = futures_util::stream::unfold(
-        (upstream, Vec::<u8>::new(), 0u64, 0u64, usage, model_for_usage),
+        (
+            upstream,
+            Vec::<u8>::new(),
+            0u64,
+            0u64,
+            usage,
+            model_for_usage,
+        ),
         |(mut up, mut buf, mut prompt_toks, mut comp_toks, usage, model)| async move {
             loop {
                 if let Some(line) = crate::upstream::take_sse_line(&mut buf) {

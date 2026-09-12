@@ -55,13 +55,14 @@ http://127.0.0.1:8787/v1
 
 ```bash
 mimo_desktop_bridge server [--port 8787] [--host 127.0.0.1] [--open] [--config-dir DIR]
+                           [--tls] [--tls-cert PEM] [--tls-key PEM]
 mimo_desktop_bridge status
 ```
 
 Config lives under the OS config dir (`%APPDATA%\mimo\mimo_desktop_bridge` on Windows) unless `--config-dir` is set:
 
-- `settings.json` — port, admin password hash, api-key-required
-- `session.json` — Xiaomi session (passToken / serviceToken)
+- `settings.json` — port, admin password hash, api-key-required, tls, `cors_origins`
+- `session.json` — Xiaomi session (passToken / serviceToken); chmod 600 on Unix
 - `api-keys.json` — sha256 hashes + display prefixes only
 
 ## HTTP surface
@@ -69,8 +70,11 @@ Config lives under the OS config dir (`%APPDATA%\mimo\mimo_desktop_bridge` on Wi
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/` | WebUI |
+| GET | `/healthz` | unauthenticated liveness probe |
 | GET | `/v1/models` | free-channel model list |
 | POST | `/v1/chat/completions` | OpenAI-compatible, SSE passthrough |
+| POST | `/v1/messages` | Anthropic Messages compat (text subset; **no tool calling**) |
+| POST | `/v1/responses` | OpenAI Responses compat (translated via chat) |
 | GET | `/api/auth/status` | login state |
 | POST | `/api/auth/login` | Xiaomi account + password |
 | POST | `/api/auth/two-factor/send` | `{flag:4\|8}` |
@@ -78,9 +82,35 @@ Config lives under the OS config dir (`%APPDATA%\mimo\mimo_desktop_bridge` on Wi
 | POST | `/api/auth/refresh` | re-mint serviceToken |
 | POST | `/api/auth/logout` | clear session |
 | GET | `/api/proxy/status` | session + `/user/xiaomi/me` probe |
+| GET | `/api/admin/session` | `{configured, authenticated}` (open) |
+| POST | `/api/admin/setup` | first-run password create (open until set) |
+| POST | `/api/admin/login` / `/api/admin/logout` | WebUI unlock |
+| POST | `/api/admin/password` | change password |
 | GET/POST | `/api/keys` | list / create |
 | DELETE | `/api/keys/:id` | revoke |
 | GET/POST | `/api/settings/api-key-required` | protect `/v1` |
+| POST | `/api/settings/port` | change bind port (restart to apply) |
+| GET/POST | `/api/settings/tls` | TLS mode |
+| GET | `/api/usage` | per-model counters |
+| GET | `/api/logs` · `/api/logs/stream` | recent events / SSE tail |
+
+All `/api/*` routes except the admin login gate require the `mdb_session`
+cookie once an admin password is configured.
+
+## Security defaults
+
+- **CORS is same-origin only.** Browser pages on other origins cannot call
+  the bridge. To allow specific origins (e.g. a local web client), list them
+  in `settings.json` → `cors_origins: ["http://localhost:3000"]`.
+- **Binding beyond loopback forces an admin password.** With `--host 0.0.0.0`
+  (or any non-loopback address) and no admin password set, the control plane
+  stays locked until one is created via the WebUI setup screen — so nobody
+  on your LAN can claim admin or drive the Xiaomi login first.
+- `/v1` can be protected separately with API keys (`api-key-required`).
+- Session and TLS private key files are written `0600` on Unix.
+
+> The free channel itself is an undocumented account session API — see the
+> disclaimer above. The hardening here only protects *your* local bridge.
 
 ## Docker
 
@@ -90,6 +120,7 @@ docker run -d --name mdb -p 8787:8787 -v mdb-data:/data mimo_desktop_bridge
 ```
 
 Open `http://<host>:8787` and sign in. Session persists in the `/data` volume.
+The image includes a `HEALTHCHECK` against `/healthz`.
 
 ## Protocol notes
 

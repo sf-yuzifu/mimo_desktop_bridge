@@ -261,7 +261,10 @@ fn set_cookies_from_headers(headers: &reqwest::header::HeaderMap) -> Vec<String>
 fn session_from_cookies(cookie_header: &str) -> Session {
     let map = parse_cookie_header(cookie_header);
     let pick = |names: &[&str]| -> Option<String> {
-        names.iter().find_map(|n| map.get(*n).cloned()).filter(|s| !s.is_empty())
+        names
+            .iter()
+            .find_map(|n| map.get(*n).cloned())
+            .filter(|s| !s.is_empty())
     };
     Session {
         pass_token: pick(&["passToken"]),
@@ -496,7 +499,11 @@ pub async fn login_auth2(
             password_hash: hash,
             cookie_header: jar.into_string(),
         };
-        return Ok((LoginOutcome::TwoFactorRequired { options }, Some(flow), None));
+        return Ok((
+            LoginOutcome::TwoFactorRequired { options },
+            Some(flow),
+            None,
+        ));
     }
 
     let code = body.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
@@ -541,7 +548,10 @@ pub async fn send_ticket(
     flag: i32,
 ) -> Result<(bool, String)> {
     let (send_path, _) = two_factor_paths(flag);
-    let url = format!("{ACCOUNT}{send_path}?_dc={}", chrono::Utc::now().timestamp_millis());
+    let url = format!(
+        "{ACCOUNT}{send_path}?_dc={}",
+        chrono::Utc::now().timestamp_millis()
+    );
     let mut req = client
         .post(&url)
         .header(reqwest::header::USER_AGENT, LOGIN_UA)
@@ -581,7 +591,10 @@ pub async fn verify_ticket(
     cookie_header: &str,
 ) -> Result<Session> {
     let (_, verify_path) = two_factor_paths(flag);
-    let url = format!("{ACCOUNT}{verify_path}?_dc={}", chrono::Utc::now().timestamp_millis());
+    let url = format!(
+        "{ACCOUNT}{verify_path}?_dc={}",
+        chrono::Utc::now().timestamp_millis()
+    );
     let mut req = client
         .post(&url)
         .header(reqwest::header::USER_AGENT, LOGIN_UA)
@@ -632,7 +645,9 @@ pub async fn verify_ticket(
             .and_then(|v| v.as_str())
             .unwrap_or("verify failed")
             .to_string();
-        return Err(BridgeError::Login(format!("verify code={code} desc={description}")));
+        return Err(BridgeError::Login(format!(
+            "verify code={code} desc={description}"
+        )));
     }
 
     if let Some(loc) = nonempty_loc(body.get("location").and_then(|v| v.as_str())) {
@@ -702,7 +717,10 @@ pub async fn verify_ticket(
         }
     };
 
-    let auth2_code = auth2_json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+    let auth2_code = auth2_json
+        .get("code")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(-1);
     let json_session = parse_session_fields(&auth2_json);
     let mut session = merge_session(json_session, jar.as_str());
 
@@ -718,13 +736,9 @@ pub async fn verify_ticket(
     }
 
     // Follow auth2 location chain — often the hop that Set-Cookies passToken
-    if let Some(loc) = auth2_loc.or_else(|| {
-        nonempty_loc(
-            auth2_json
-                .get("location")
-                .and_then(|v| v.as_str()),
-        )
-    }) {
+    if let Some(loc) =
+        auth2_loc.or_else(|| nonempty_loc(auth2_json.get("location").and_then(|v| v.as_str())))
+    {
         let (c, _) = follow_redirs(client, loc, jar.as_str(), LOGIN_UA).await?;
         jar = CookieJar::from(&c);
         session = merge_session(session, jar.as_str());
@@ -756,7 +770,7 @@ fn stable_device_id(user_id: Option<&str>) -> String {
     let seed = user_id.unwrap_or("anonymous");
     let mut hasher = Md5::new();
     hasher.update(format!("mimo-desktop-bridge:{seed}").as_bytes());
-    format!("pc_{}", hex::encode(hasher.finalize())[..16].to_string())
+    format!("pc_{}", &hex::encode(hasher.finalize())[..16])
 }
 
 fn sha1_base64(s: &str) -> String {
@@ -781,7 +795,7 @@ fn url_form_encode(s: &str) -> String {
 fn pick_service_token(headers: &reqwest::header::HeaderMap) -> Option<String> {
     for raw in set_cookies_from_headers(headers) {
         let head = raw.split(';').next().unwrap_or("").trim();
-        for prefix in [format!("serviceToken="), format!("{SID}_serviceToken=")] {
+        for prefix in ["serviceToken=".to_string(), format!("{SID}_serviceToken=")] {
             if let Some(v) = head.strip_prefix(&prefix) {
                 if !v.is_empty() && v != "EXPIRED" {
                     return Some(v.to_string());
@@ -811,9 +825,7 @@ pub async fn mint_service_token(client: &reqwest::Client, session: &mut Session)
     ));
 
     // Phase 1
-    let phase1_url = format!(
-        "{SERVICE_LOGIN}?_locale=zh_CN&_snsNone=true&sid={SID}&_json=true"
-    );
+    let phase1_url = format!("{SERVICE_LOGIN}?_locale=zh_CN&_snsNone=true&sid={SID}&_json=true");
     let p1 = {
         let mut r = client
             .get(&phase1_url)
@@ -937,9 +949,8 @@ pub async fn mint_service_token(client: &reqwest::Client, session: &mut Session)
             .filter(|t| !t.is_empty() && t != "EXPIRED");
     }
 
-    let token = token.ok_or_else(|| {
-        BridgeError::Login("phase2 returned no serviceToken".into())
-    })?;
+    let token =
+        token.ok_or_else(|| BridgeError::Login("phase2 returned no serviceToken".into()))?;
     session.service_token = Some(token);
     session.refreshed_at = Some(chrono::Utc::now().timestamp_millis());
     Ok(())
@@ -964,8 +975,7 @@ pub async fn probe_me(client: &reqwest::Client, session: &Session) -> Result<(u1
     let text = resp.text().await.unwrap_or_default();
     let logged_in = serde_json::from_str::<serde_json::Value>(strip_prefix(&text))
         .map(|j| {
-            j.get("code").and_then(|v| v.as_i64()) == Some(0)
-                && j.pointer("/data/userId").is_some()
+            j.get("code").and_then(|v| v.as_i64()) == Some(0) && j.pointer("/data/userId").is_some()
         })
         .unwrap_or(false);
     Ok((status, logged_in, text.chars().take(200).collect()))
@@ -990,12 +1000,18 @@ mod tests {
     fn extract_raw_number_keeps_u64_precision() {
         // serde_json would truncate this to f64; raw text keeps all digits.
         let s = r#"{"code":0,"nonce":1234567890123456789,"ssecurity":"x"}"#;
-        assert_eq!(extract_raw_number(s, "nonce"), Some("1234567890123456789".into()));
+        assert_eq!(
+            extract_raw_number(s, "nonce"),
+            Some("1234567890123456789".into())
+        );
     }
 
     #[test]
     fn extract_raw_number_edge_cases() {
-        assert_eq!(extract_raw_number(r#"{"nonce":-42}"#, "nonce"), Some("-42".into()));
+        assert_eq!(
+            extract_raw_number(r#"{"nonce":-42}"#, "nonce"),
+            Some("-42".into())
+        );
         assert_eq!(extract_raw_number(r#"{"nonce":"abc"}"#, "nonce"), None);
         assert_eq!(extract_raw_number(r#"{"other":1}"#, "nonce"), None);
         assert_eq!(extract_raw_number("", "nonce"), None);

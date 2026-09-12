@@ -64,13 +64,7 @@ impl Usage {
         Ok(())
     }
 
-    pub fn record(
-        &self,
-        model: &str,
-        prompt_tokens: u64,
-        completion_tokens: u64,
-        error: bool,
-    ) {
+    pub fn record(&self, model: &str, prompt_tokens: u64, completion_tokens: u64, error: bool) {
         self.record_inner(model, prompt_tokens, completion_tokens, error, true)
     }
 
