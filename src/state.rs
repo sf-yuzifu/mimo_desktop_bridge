@@ -27,7 +27,11 @@ impl BridgeState {
         let logs = Arc::new(LogHub::new(200));
         let http = reqwest::Client::builder()
             .gzip(true)
-            .timeout(std::time::Duration::from_secs(120))
+            // Connection setup gets its own bound; the total timeout must NOT
+            // cover the whole body read or long SSE generations get cut off.
+            .connect_timeout(std::time::Duration::from_secs(30))
+            // Applied per read: for SSE this means "max silence between chunks".
+            .read_timeout(std::time::Duration::from_secs(120))
             // Manual redirect handling so we can harvest Set-Cookie on every hop
             // (auto-follow drops intermediate cookies — passToken often lands there).
             .redirect(reqwest::redirect::Policy::none())

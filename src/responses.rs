@@ -197,7 +197,7 @@ async fn responses_stream_from_chat(
         let mut text = String::new();
         let mut reasoning = String::new();
         let mut usage = Value::Null;
-        let mut buffer = String::new();
+        let mut buffer: Vec<u8> = Vec::new();
         let mut stream = upstream.bytes_stream();
         let mut reasoning_opened = false;
         let mut reasoning_closed = false;
@@ -319,13 +319,14 @@ async fn responses_stream_from_chat(
                 .await;
                 return;
             };
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.extend_from_slice(&chunk);
             loop {
-                let Some(pos) = buffer.find('\n') else {
+                let Some(pos) = buffer.iter().position(|&b| b == b'\n') else {
                     break;
                 };
-                let mut line = buffer[..pos].to_string();
-                buffer = buffer[pos + 1..].to_string();
+                let line_bytes: Vec<u8> = buffer.drain(..pos).collect();
+                buffer.drain(..1);
+                let mut line = String::from_utf8_lossy(&line_bytes).into_owned();
                 if line.ends_with('\r') {
                     line.pop();
                 }

@@ -232,7 +232,7 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
     let body_stream = futures_util::stream::unfold(
         (
             upstream,
-            String::new(),
+            Vec::<u8>::new(),
             0u64,
             0u64,
             false,
@@ -256,9 +256,10 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
                 return None;
             }
             loop {
-                if let Some(pos) = buf.find('\n') {
-                    let mut line = buf[..pos].to_string();
-                    buf = buf[pos + 1..].to_string();
+                if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                    let line_bytes: Vec<u8> = buf.drain(..pos).collect();
+                    buf.drain(..1);
+                    let mut line = String::from_utf8_lossy(&line_bytes).into_owned();
                     if line.ends_with('\r') {
                         line.pop();
                     }
@@ -368,7 +369,7 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
                     ));
                 }
                 match up.next().await {
-                    Some(Ok(b)) => buf.push_str(&String::from_utf8_lossy(&b)),
+                    Some(Ok(b)) => buf.extend_from_slice(&b),
                     Some(Err(e)) => {
                         st.usage.record(&model, prompt_toks, comp_toks, true);
                         done = true;
