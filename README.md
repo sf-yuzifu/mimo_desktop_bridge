@@ -155,8 +155,8 @@ This repository is **self-contained** (crate + WebUI + Docker + OpenWrt + GitHub
 | `.github/workflows/openwrt.yml` | tag `v*` / manual | aarch64 + x86_64: tar bundle + `.ipk` + `.apk` |
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 OpenWrt packaging: see `openwrt/README.md` (`build-ipk.sh` / `pack-bundle.sh`).

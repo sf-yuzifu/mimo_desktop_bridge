@@ -8,7 +8,7 @@
 #   openwrt/build-ipk.sh <path-to-binary> [output.ipk]
 #
 # Env overrides:
-#   PKG_VERSION   default 0.1.0
+#   PKG_VERSION   default 0.2.0
 #   PKG_RELEASE   default 1
 #   PKG_ARCH      default aarch64_cortex-a53
 set -euo pipefail
@@ -18,7 +18,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OWRT="$ROOT/openwrt"
 
 PKG_NAME="luci-app-mimo-desktop-bridge"
-PKG_VERSION="${PKG_VERSION:-0.1.0}"
+PKG_VERSION="${PKG_VERSION:-0.2.0}"
 PKG_RELEASE="${PKG_RELEASE:-1}"
 PKG_ARCH="${PKG_ARCH:-aarch64_cortex-a53}"
 
