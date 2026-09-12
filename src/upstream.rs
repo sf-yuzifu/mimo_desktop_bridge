@@ -15,14 +15,28 @@ pub enum SendError {
     Upstream(String),
 }
 
+/// Refresh tokens older than this proactively so an idle bridge does not
+/// pay a 401 round-trip on the first request after a long pause.
+const PROACTIVE_REFRESH_AGE_MS: i64 = 24 * 3600 * 1000;
+
 /// POST a chat-completions payload to the MiMo free channel.
 ///
 /// On 401, performs one single-flight token refresh and retries once.
 pub async fn send_chat(state: &Arc<BridgeState>, payload: &Value) -> Result<reqwest::Response, SendError> {
-    let session = match state.storage.session() {
+    let mut session = match state.storage.session() {
         Some(s) if s.is_authenticated() => s,
         _ => return Err(SendError::NotLoggedIn),
     };
+    if let Some(at) = session.refreshed_at {
+        let stale = chrono::Utc::now().timestamp_millis() - at > PROACTIVE_REFRESH_AGE_MS;
+        if stale {
+            // Failure is fine — the old token may still work; a real expiry
+            // surfaces as 401 and triggers the retry below.
+            if let Ok(s) = state.refresh_session(false).await {
+                session = s;
+            }
+        }
+    }
     let stream = payload
         .get("stream")
         .and_then(|v| v.as_bool())

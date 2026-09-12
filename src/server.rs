@@ -216,11 +216,12 @@ fn admin_ok(state: &BridgeState, headers: &HeaderMap) -> bool {
 }
 
 fn issue_admin_session(state: &BridgeState) -> String {
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut sessions = state.admin_sessions.lock();
+    // Drop expired entries while we're here so the Vec cannot grow unbounded.
+    sessions.retain(|(_, issued)| now - issued < 12 * 3600 * 1000);
     let tok = uuid::Uuid::new_v4().simple().to_string();
-    state
-        .admin_sessions
-        .lock()
-        .push((tok.clone(), chrono::Utc::now().timestamp_millis()));
+    sessions.push((tok.clone(), now));
     tok
 }
 
@@ -283,9 +284,15 @@ pub fn router(state: Arc<BridgeState>) -> Router {
         ));
 
     api.merge(proxy)
+        .route("/healthz", get(healthz))
         .fallback(static_asset)
         .layer(cors_layer(&state))
         .with_state(state)
+}
+
+/// Unauthenticated liveness probe (orchestrators, Docker HEALTHCHECK).
+async fn healthz() -> Response {
+    Json(json!({ "ok": true })).into_response()
 }
 
 /// Same-origin by default. Only origins explicitly listed in settings get
