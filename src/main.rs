@@ -82,9 +82,12 @@ async fn main() -> anyhow::Result<()> {
             };
             let settings = storage.settings();
             let port = port.unwrap_or(settings.port);
-            let host: IpAddr = host
-                .map(|h| h.parse().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)))
-                .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+            let host: IpAddr = match host {
+                Some(h) => h
+                    .parse()
+                    .map_err(|e| anyhow::anyhow!("invalid --host {h:?}: {e}"))?,
+                None => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            };
             let tls_flag = if tls || tls_cert.is_some() || tls_key.is_some() {
                 Some(true)
             } else {
