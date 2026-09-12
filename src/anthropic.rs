@@ -36,6 +36,23 @@ pub fn anthropic_to_openai(body: &Value) -> Result<Value, String> {
         .and_then(|v| v.as_u64())
         .unwrap_or(4096);
 
+    // Tool calling is not translated — fail loudly instead of silently
+    // dropping the tools and letting the model answer without them.
+    let has_tools = body
+        .get("tools")
+        .and_then(|v| v.as_array())
+        .map(|a| !a.is_empty())
+        .unwrap_or(false)
+        || body.get("tool_choice").is_some();
+    if has_tools {
+        return Err(
+            "tool calling is not supported by this Anthropic-compat bridge \
+             (the MiMo free channel is reached via chat completions without tool translation). \
+             Remove `tools`/`tool_choice`, or call /v1/chat/completions directly."
+                .into(),
+        );
+    }
+
     let mut messages: Vec<Value> = Vec::new();
 
     if let Some(sys) = body.get("system") {
@@ -452,6 +469,25 @@ mod tests {
     fn requires_model_and_messages() {
         assert!(anthropic_to_openai(&json!({})).is_err());
         assert!(anthropic_to_openai(&json!({"model": "m"})).is_err());
+    }
+
+    #[test]
+    fn tools_are_rejected_explicitly() {
+        let err = anthropic_to_openai(&json!({
+            "model": "m",
+            "messages": [],
+            "tools": [{"name": "t", "description": "", "input_schema": {}}]
+        }))
+        .unwrap_err();
+        assert!(err.contains("tool calling is not supported"));
+        assert!(anthropic_to_openai(&json!({
+            "model": "m",
+            "messages": [],
+            "tool_choice": {"type": "auto"}
+        }))
+        .is_err());
+        // Empty tools array is fine
+        assert!(anthropic_to_openai(&json!({"model": "m", "messages": [], "tools": []})).is_ok());
     }
 
     #[test]
