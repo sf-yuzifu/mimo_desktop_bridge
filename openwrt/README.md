@@ -40,11 +40,11 @@ cross build --release --target aarch64-unknown-linux-musl --bin mimo_desktop_bri
 
 ## 自动 CI
 
-推送 `v*` tag 或手动触发 `.github/workflows/openwrt.yml`，会产出：
+推送 `v*` tag 或手动触发 `.github/workflows/openwrt.yml`，会为 **aarch64** 与 **x86_64** 各产出：
 
-- `mimo_desktop_bridge_v*_openwrt_aarch64.tar.gz` — 手动安装包
-- `luci-app-mimo-desktop-bridge_*_aarch64_cortex-a53.ipk` — OpenWrt 24.10 `opkg install`
-- `luci-app-mimo-desktop-bridge-*-r1.apk` — OpenWrt 25.12+ `apk add`
+- `mimo_desktop_bridge_v*_openwrt_{aarch64,x86_64}.tar.gz` — 手动安装包
+- `luci-app-mimo-desktop-bridge_*_{aarch64_cortex-a53,x86_64}.ipk` — OpenWrt 24.10 `opkg install`
+- `luci-app-mimo-desktop-bridge-*-r1_{aarch64,x86_64}.apk` — OpenWrt 25.12+ `apk add`
 
 ## 手动安装（无包管理器）
 

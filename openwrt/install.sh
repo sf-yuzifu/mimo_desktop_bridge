@@ -14,8 +14,8 @@ echo "==> mimo_desktop_bridge OpenWrt installer"
 [ -f "$BIN_SRC" ] || { echo "!! missing binary: $BIN_SRC" >&2; exit 1; }
 
 case "$(uname -m)" in
-	aarch64|arm64) : ;;
-	*) echo "!! warning: router arch is $(uname -m), bundle is aarch64. Continuing anyway." >&2 ;;
+	aarch64|arm64|x86_64|amd64) : ;;
+	*) echo "!! warning: router arch is $(uname -m). Continuing anyway." >&2 ;;
 esac
 
 echo "==> installing /usr/bin/$NAME"

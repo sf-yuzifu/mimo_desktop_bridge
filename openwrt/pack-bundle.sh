@@ -7,7 +7,7 @@ BIN="${1:?usage: pack-bundle.sh <binary> [out.tar.gz]}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OWRT="$ROOT/openwrt"
 NAME=mimo_desktop_bridge
-OUT="${2:-$OWRT/out/${NAME}_openwrt_aarch64.tar.gz}"
+OUT="${2:-$OWRT/out/${NAME}_openwrt_$(uname -m).tar.gz}"
 
 mkdir -p "$(dirname "$OUT")"
 OUT="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
