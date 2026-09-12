@@ -2,7 +2,6 @@
 //!
 //! Good enough for Claude Code / Anthropic SDKs on the MiMo free channel.
 
-use crate::auth::{safe_cookie_header, CHAT_PATH, API_BASE, PC_UA, SOURCE};
 use crate::state::BridgeState;
 use axum::body::Body;
 use axum::extract::State;
@@ -120,67 +119,31 @@ async fn call_upstream(
     state: &Arc<BridgeState>,
     openai_body: &Value,
 ) -> Result<reqwest::Response, Response> {
-    let session = match state.storage.session() {
-        Some(s) if s.is_authenticated() => s,
-        _ => {
-            return Err(anth_err(
-                StatusCode::UNAUTHORIZED,
-                "not logged in — open the WebUI and sign in",
-                "authentication_error",
+    match crate::upstream::send_chat(state, openai_body).await {
+        Ok(r) if r.status().is_success() => Ok(r),
+        Ok(r) => {
+            let status = r.status().as_u16();
+            let text = r.text().await.unwrap_or_default();
+            Err(anth_err(
+                StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+                &format!(
+                    "upstream {status}: {}",
+                    text.chars().take(300).collect::<String>()
+                ),
+                "api_error",
             ))
         }
-    };
-    let url = format!("{API_BASE}{CHAT_PATH}");
-    let send = |cookie: String| {
-        let url = url.clone();
-        let body = openai_body.clone();
-        let client = state.http.clone();
-        async move {
-            let mut req = client
-                .post(&url)
-                .header(reqwest::header::USER_AGENT, PC_UA)
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .header("X-Mimo-Source", SOURCE)
-                .header(reqwest::header::ACCEPT, "text/event-stream")
-                .body(body.to_string());
-            if let Some(c) = safe_cookie_header(&cookie) {
-                req = req.header(reqwest::header::COOKIE, c);
-            }
-            req.send().await
-        }
-    };
-
-    let mut resp = send(session.business_cookie())
-        .await
-        .map_err(|e| {
-            anth_err(
-                StatusCode::BAD_GATEWAY,
-                &format!("upstream fetch failed: {e}"),
-                "api_error",
-            )
-        })?;
-
-    if resp.status() == 401 {
-        if let Ok(s) = state.refresh_session(false).await {
-            if let Ok(r2) = send(s.business_cookie()).await {
-                resp = r2;
-            }
-        }
-    }
-
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(anth_err(
-            StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
-            &format!(
-                "upstream {status}: {}",
-                text.chars().take(300).collect::<String>()
-            ),
+        Err(crate::upstream::SendError::NotLoggedIn) => Err(anth_err(
+            StatusCode::UNAUTHORIZED,
+            "not logged in — open the WebUI and sign in",
+            "authentication_error",
+        )),
+        Err(crate::upstream::SendError::Upstream(e)) => Err(anth_err(
+            StatusCode::BAD_GATEWAY,
+            &format!("upstream fetch failed: {e}"),
             "api_error",
-        ));
+        )),
     }
-    Ok(resp)
 }
 
 pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Response {
@@ -249,13 +212,7 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
                 return None;
             }
             loop {
-                if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                    let line_bytes: Vec<u8> = buf.drain(..pos).collect();
-                    buf.drain(..1);
-                    let mut line = String::from_utf8_lossy(&line_bytes).into_owned();
-                    if line.ends_with('\r') {
-                        line.pop();
-                    }
+                if let Some(line) = crate::upstream::take_sse_line(&mut buf) {
                     let line = line.trim().to_string();
                     if line.is_empty() {
                         continue;

@@ -8,6 +8,7 @@ pub mod responses;
 pub mod server;
 pub mod state;
 pub mod storage;
+pub mod upstream;
 pub mod usage;
 
 pub use error::{BridgeError, Result};

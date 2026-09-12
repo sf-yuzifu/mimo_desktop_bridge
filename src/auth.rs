@@ -201,6 +201,42 @@ pub fn merge_set_cookie(cookie_header: &str, set_cookies: &[String]) -> String {
         .join("; ")
 }
 
+/// Accumulated Cookie header across a redirect chain.
+///
+/// Wraps the merge/harvest dance that was previously open-coded at every
+/// hop: `jar.merge(resp.headers())` folds Set-Cookie into the jar, and
+/// `jar.value()` yields a header value guaranteed to be HeaderValue-safe.
+#[derive(Debug, Clone, Default)]
+pub struct CookieJar(String);
+
+impl CookieJar {
+    pub fn new() -> Self {
+        Self(String::new())
+    }
+
+    pub fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+
+    /// Fold a response's Set-Cookie headers into the jar.
+    pub fn merge(&mut self, headers: &reqwest::header::HeaderMap) {
+        self.0 = merge_set_cookie(&self.0, &set_cookies_from_headers(headers));
+    }
+
+    /// Cookie header value safe for reqwest, or None when empty.
+    pub fn value(&self) -> Option<String> {
+        safe_cookie_header(&self.0)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
 /// Build a Cookie header that is guaranteed to be a valid HeaderValue.
 pub fn safe_cookie_header(cookie: &str) -> Option<String> {
     let s = sanitize_header_text(cookie);
@@ -268,17 +304,17 @@ async fn follow_redirs(
     if url.is_empty() {
         return Err(BridgeError::Login("follow_redirs: empty url".into()));
     }
-    let mut cookie = cookie_header.to_string();
+    let mut jar = CookieJar::from(cookie_header);
     for _ in 0..8 {
         let mut req = client.get(&url).header(reqwest::header::USER_AGENT, ua);
-        if let Some(c) = safe_cookie_header(&cookie) {
+        if let Some(c) = jar.value() {
             req = req.header(reqwest::header::COOKIE, c);
         }
         let resp = req
             .send()
             .await
             .map_err(|e| BridgeError::Login(format!("follow_redirs GET {url}: {e}")))?;
-        cookie = merge_set_cookie(&cookie, &set_cookies_from_headers(resp.headers()));
+        jar.merge(resp.headers());
         let status = resp.status();
         if status.is_redirection() {
             let loc = nonempty_loc(
@@ -295,7 +331,7 @@ async fn follow_redirs(
                 continue;
             }
         }
-        return Ok((cookie, resp));
+        return Ok((jar.into_string(), resp));
     }
     Err(BridgeError::Login("too many redirects".into()))
 }
@@ -336,18 +372,20 @@ pub async fn login_auth2(
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok()),
         );
-        let c0 = merge_set_cookie("", &set_cookies_from_headers(resp.headers()));
+        let mut jar0 = CookieJar::new();
+        jar0.merge(resp.headers());
         match loc {
             Some(loc) => {
-                let (c, r) = follow_redirs(client, loc, &c0, LOGIN_UA).await?;
+                let (c, r) = follow_redirs(client, loc, jar0.as_str(), LOGIN_UA).await?;
                 (c, r)
             }
-            None => (c0, resp),
+            None => (jar0.into_string(), resp),
         }
     } else {
         (String::new(), resp)
     };
-    let mut cookie = merge_set_cookie(&cookie_from_auth2, &set_cookies_from_headers(resp.headers()));
+    let mut jar = CookieJar::from(&cookie_from_auth2);
+    jar.merge(resp.headers());
     let text = resp.text().await?;
     let body: serde_json::Value = serde_json::from_str(strip_prefix(&text)).map_err(|e| {
         BridgeError::Login(format!(
@@ -380,7 +418,7 @@ pub async fn login_auth2(
             let mut r = client
                 .get(&list_url)
                 .header(reqwest::header::USER_AGENT, LOGIN_UA);
-            if let Some(c) = safe_cookie_header(&cookie) {
+            if let Some(c) = jar.value() {
                 r = r.header(reqwest::header::COOKIE, c);
             }
             let resp = r
@@ -393,11 +431,11 @@ pub async fn login_auth2(
                         .get(reqwest::header::LOCATION)
                         .and_then(|v| v.to_str().ok()),
                 );
-                cookie = merge_set_cookie(&cookie, &set_cookies_from_headers(resp.headers()));
+                jar.merge(resp.headers());
                 match loc {
                     Some(loc) => {
-                        let (c, r) = follow_redirs(client, loc, &cookie, LOGIN_UA).await?;
-                        cookie = c;
+                        let (c, r) = follow_redirs(client, loc, jar.as_str(), LOGIN_UA).await?;
+                        jar = CookieJar::from(&c);
                         r
                     }
                     None => resp,
@@ -406,7 +444,7 @@ pub async fn login_auth2(
                 resp
             }
         };
-        cookie = merge_set_cookie(&cookie, &set_cookies_from_headers(list_resp.headers()));
+        jar.merge(list_resp.headers());
         let list_text = list_resp.text().await?;
         let list_json: serde_json::Value = serde_json::from_str(strip_prefix(&list_text))
             .map_err(|e| BridgeError::Login(format!("identity/list parse: {e}")))?;
@@ -456,7 +494,7 @@ pub async fn login_auth2(
             options: options.clone(),
             account: req.account.clone(),
             password_hash: hash,
-            cookie_header: cookie,
+            cookie_header: jar.into_string(),
         };
         return Ok((LoginOutcome::TwoFactorRequired { options }, Some(flow), None));
     }
@@ -472,7 +510,7 @@ pub async fn login_auth2(
     }
 
     let json_session = parse_session_fields(&body);
-    let session = merge_session(json_session, &cookie);
+    let session = merge_session(json_session, jar.as_str());
     let nick = session.nick.clone();
     let user_id = session.user_id.clone();
     Ok((
@@ -515,7 +553,9 @@ pub async fn send_ticket(
         .send()
         .await
         .map_err(|e| BridgeError::Login(format!("sendTicket: {e}")))?;
-    let next_cookie = merge_set_cookie(&flow.cookie_header, &set_cookies_from_headers(resp.headers()));
+    let mut jar = CookieJar::from(&flow.cookie_header);
+    jar.merge(resp.headers());
+    let next_cookie = jar.into_string();
     let text = resp.text().await?;
     let body: serde_json::Value = serde_json::from_str(strip_prefix(&text))
         .map_err(|e| BridgeError::Login(format!("sendTicket parse: {e}")))?;
@@ -558,20 +598,25 @@ pub async fn verify_ticket(
         .send()
         .await
         .map_err(|e| BridgeError::Login(format!("verifyTicket: {e}")))?;
-    let cookie0 = merge_set_cookie(cookie_header, &set_cookies_from_headers(resp.headers()));
+    let mut jar = CookieJar::from(cookie_header);
+    jar.merge(resp.headers());
     // verifyPhone sometimes 302s — walk the chain so identity cookies land
-    let (mut cookie, resp) = if resp.status().is_redirection() {
+    let resp = if resp.status().is_redirection() {
         let loc = nonempty_loc(
             resp.headers()
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok()),
         );
         match loc {
-            Some(loc) => follow_redirs(client, loc, &cookie0, LOGIN_UA).await?,
-            None => (cookie0, resp),
+            Some(loc) => {
+                let (c, r) = follow_redirs(client, loc, jar.as_str(), LOGIN_UA).await?;
+                jar = CookieJar::from(&c);
+                r
+            }
+            None => resp,
         }
     } else {
-        (cookie0, resp)
+        resp
     };
     let text = resp.text().await?;
     let body: serde_json::Value = serde_json::from_str(strip_prefix(&text))
@@ -591,8 +636,8 @@ pub async fn verify_ticket(
     }
 
     if let Some(loc) = nonempty_loc(body.get("location").and_then(|v| v.as_str())) {
-        let (c, _) = follow_redirs(client, loc, &cookie, LOGIN_UA).await?;
-        cookie = c;
+        let (c, _) = follow_redirs(client, loc, jar.as_str(), LOGIN_UA).await?;
+        jar = CookieJar::from(&c);
     }
 
     // Replay auth2 with trusted identity_session
@@ -608,7 +653,7 @@ pub async fn verify_ticket(
             .post(AUTH2)
             .header(reqwest::header::USER_AGENT, LOGIN_UA)
             .form(&form);
-        if let Some(c) = safe_cookie_header(&cookie) {
+        if let Some(c) = jar.value() {
             r = r.header(reqwest::header::COOKIE, c);
         }
         let resp = r
@@ -621,11 +666,11 @@ pub async fn verify_ticket(
                     .get(reqwest::header::LOCATION)
                     .and_then(|v| v.to_str().ok()),
             );
-            cookie = merge_set_cookie(&cookie, &set_cookies_from_headers(resp.headers()));
+            jar.merge(resp.headers());
             match loc {
                 Some(loc) => {
-                    let (c, r) = follow_redirs(client, loc, &cookie, LOGIN_UA).await?;
-                    cookie = c;
+                    let (c, r) = follow_redirs(client, loc, jar.as_str(), LOGIN_UA).await?;
+                    jar = CookieJar::from(&c);
                     r
                 }
                 None => resp,
@@ -634,7 +679,7 @@ pub async fn verify_ticket(
             resp
         }
     };
-    cookie = merge_set_cookie(&cookie, &set_cookies_from_headers(auth2.headers()));
+    jar.merge(auth2.headers());
     let auth2_loc = nonempty_loc(
         auth2
             .headers()
@@ -646,8 +691,8 @@ pub async fn verify_ticket(
         Ok(v) => v,
         Err(_) => {
             if let Some(loc) = auth2_loc.clone() {
-                let (c, r) = follow_redirs(client, loc, &cookie, LOGIN_UA).await?;
-                cookie = c;
+                let (c, r) = follow_redirs(client, loc, jar.as_str(), LOGIN_UA).await?;
+                jar = CookieJar::from(&c);
                 let t = r.text().await?;
                 serde_json::from_str(strip_prefix(&t))
                     .map_err(|e| BridgeError::Login(format!("post-2fa auth2 parse: {e}")))?
@@ -659,7 +704,7 @@ pub async fn verify_ticket(
 
     let auth2_code = auth2_json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
     let json_session = parse_session_fields(&auth2_json);
-    let mut session = merge_session(json_session, &cookie);
+    let mut session = merge_session(json_session, jar.as_str());
 
     if auth2_code != 0 && session.pass_token.is_none() {
         let description = auth2_json
@@ -680,9 +725,9 @@ pub async fn verify_ticket(
                 .and_then(|v| v.as_str()),
         )
     }) {
-        let (c, _) = follow_redirs(client, loc, &cookie, LOGIN_UA).await?;
-        cookie = c;
-        session = merge_session(session, &cookie);
+        let (c, _) = follow_redirs(client, loc, jar.as_str(), LOGIN_UA).await?;
+        jar = CookieJar::from(&c);
+        session = merge_session(session, jar.as_str());
     }
 
     if session.pass_token.is_none() {
@@ -690,7 +735,8 @@ pub async fn verify_ticket(
             serde_json::Value::Object(m) => m.keys().cloned().collect(),
             _ => vec!["<non-object>".into()],
         };
-        let cookie_names: Vec<String> = cookie
+        let cookie_names: Vec<String> = jar
+            .as_str()
             .split(';')
             .filter_map(|s| s.split_once('=').map(|(k, _)| k.trim().to_string()))
             .filter(|s| !s.is_empty())
@@ -1037,5 +1083,27 @@ mod tests {
         assert!(c.contains("userId=42"));
         assert!(c.contains("cUserId=c42"));
         assert!(s.is_authenticated());
+    }
+
+    fn header_map(set_cookies: &[&str]) -> reqwest::header::HeaderMap {
+        let mut hm = reqwest::header::HeaderMap::new();
+        for sc in set_cookies {
+            hm.append(
+                reqwest::header::SET_COOKIE,
+                sc.parse::<reqwest::header::HeaderValue>().unwrap(),
+            );
+        }
+        hm
+    }
+
+    #[test]
+    fn cookie_jar_merges_and_serves_safe_value() {
+        let mut jar = CookieJar::new();
+        assert_eq!(jar.value(), None);
+        jar.merge(&header_map(&["a=1; Path=/; HttpOnly"]));
+        assert_eq!(jar.value().as_deref(), Some("a=1"));
+        jar.merge(&header_map(&["b=2", "a=; Max-Age=0"]));
+        assert_eq!(jar.as_str(), "b=2");
+        assert_eq!(CookieJar::from("x=1").into_string(), "x=1");
     }
 }

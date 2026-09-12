@@ -1,8 +1,8 @@
 //! OpenAI Responses API — chat-completions compat for the MiMo free channel.
 
-use crate::auth::{safe_cookie_header, CHAT_PATH, API_BASE, PC_UA, SOURCE};
 use crate::proxy::error_response;
 use crate::state::BridgeState;
+use crate::upstream::{send_chat, SendError};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -44,52 +44,22 @@ pub async fn responses(State(state): State<Arc<BridgeState>>, body: String) -> R
     }));
 
     let chat_body = responses_to_chat_body(&parsed, stream);
-    let session = match state.storage.session() {
-        Some(s) if s.is_authenticated() => s,
-        _ => {
+
+    let resp = match send_chat(&state, &chat_body).await {
+        Ok(r) => r,
+        Err(SendError::NotLoggedIn) => {
             return error_response(
                 StatusCode::UNAUTHORIZED,
                 "not logged in — open the WebUI and sign in",
                 "invalid_api_key",
             )
         }
-    };
-
-    let url = format!("{API_BASE}{CHAT_PATH}");
-    let send = |cookie: String| {
-        let url = url.clone();
-        let body = chat_body.clone();
-        let client = state.http.clone();
-        async move {
-            let mut req = client
-                .post(&url)
-                .header(reqwest::header::USER_AGENT, PC_UA)
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .header("X-Mimo-Source", SOURCE)
-                .header(
-                    reqwest::header::ACCEPT,
-                    if stream {
-                        "text/event-stream"
-                    } else {
-                        "application/json"
-                    },
-                )
-                .body(body.to_string());
-            if let Some(c) = safe_cookie_header(&cookie) {
-                req = req.header(reqwest::header::COOKIE, c);
-            }
-            req.send().await
-        }
-    };
-
-    let mut resp = match send(session.business_cookie()).await {
-        Ok(r) => r,
-        Err(e) => {
+        Err(SendError::Upstream(e)) => {
             state.emit_log(json!({
                 "ts": chrono::Utc::now().timestamp_millis(),
                 "kind": "error",
                 "path": "/v1/responses",
-                "message": e.to_string(),
+                "message": e,
                 "elapsed_ms": started.elapsed().as_millis() as u64,
             }));
             return error_response(
@@ -99,14 +69,6 @@ pub async fn responses(State(state): State<Arc<BridgeState>>, body: String) -> R
             );
         }
     };
-
-    if resp.status() == 401 {
-        if let Ok(s) = state.refresh_session(false).await {
-            if let Ok(r2) = send(s.business_cookie()).await {
-                resp = r2;
-            }
-        }
-    }
 
     let status = resp.status();
     state.emit_log(json!({
@@ -314,15 +276,9 @@ async fn responses_stream_from_chat(
             };
             buffer.extend_from_slice(&chunk);
             loop {
-                let Some(pos) = buffer.iter().position(|&b| b == b'\n') else {
+                let Some(line) = crate::upstream::take_sse_line(&mut buffer) else {
                     break;
                 };
-                let line_bytes: Vec<u8> = buffer.drain(..pos).collect();
-                buffer.drain(..1);
-                let mut line = String::from_utf8_lossy(&line_bytes).into_owned();
-                if line.ends_with('\r') {
-                    line.pop();
-                }
                 let line = line.trim().to_string();
                 if line.is_empty() {
                     continue;

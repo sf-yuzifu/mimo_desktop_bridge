@@ -1,7 +1,8 @@
 //! OpenAI-compatible proxy to the MiMo free channel.
 
-use crate::auth::{CHAT_PATH, API_BASE, PC_UA, SOURCE};
+use crate::auth::API_BASE;
 use crate::state::BridgeState;
+use crate::upstream::{send_chat, SendError};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
@@ -58,17 +59,6 @@ pub fn error_response(status: StatusCode, message: &str, code: &str) -> Response
 }
 
 pub async fn chat(State(state): State<Arc<BridgeState>>, body: String) -> Response {
-    let session = match state.storage.session() {
-        Some(s) if s.is_authenticated() => s,
-        _ => {
-            return error_response(
-                StatusCode::UNAUTHORIZED,
-                "not logged in — open the WebUI and sign in with a Xiaomi account",
-                "invalid_api_key",
-            )
-        }
-    };
-
     let mut payload: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(e) => {
@@ -107,39 +97,16 @@ pub async fn chat(State(state): State<Arc<BridgeState>>, body: String) -> Respon
         "stream": stream,
     }));
 
-    let url = format!("{API_BASE}{CHAT_PATH}");
-    let client = state.http.clone();
-    let cookie = session.business_cookie();
-
-    let send = |cookie: String| {
-        let url = url.clone();
-        let payload = payload.clone();
-        let client = client.clone();
-        async move {
-            let mut req = client
-                .post(&url)
-                .header(reqwest::header::USER_AGENT, PC_UA)
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .header("X-Mimo-Source", SOURCE)
-                .header(
-                    reqwest::header::ACCEPT,
-                    if stream {
-                        "text/event-stream"
-                    } else {
-                        "application/json"
-                    },
-                )
-                .body(payload.to_string());
-            if let Some(c) = crate::auth::safe_cookie_header(&cookie) {
-                req = req.header(reqwest::header::COOKIE, c);
-            }
-            req.send().await
-        }
-    };
-
-    let mut resp = match send(cookie.clone()).await {
+    let resp = match send_chat(&state, &payload).await {
         Ok(r) => r,
-        Err(e) => {
+        Err(SendError::NotLoggedIn) => {
+            return error_response(
+                StatusCode::UNAUTHORIZED,
+                "not logged in — open the WebUI and sign in with a Xiaomi account",
+                "invalid_api_key",
+            )
+        }
+        Err(SendError::Upstream(e)) => {
             return error_response(
                 StatusCode::BAD_GATEWAY,
                 &format!("upstream fetch failed: {e}"),
@@ -147,15 +114,6 @@ pub async fn chat(State(state): State<Arc<BridgeState>>, body: String) -> Respon
             )
         }
     };
-
-    // 401 → one refresh attempt (single-flight; losers reuse the minted token)
-    if resp.status() == 401 {
-        if let Ok(s) = state.refresh_session(false).await {
-            if let Ok(r2) = send(s.business_cookie()).await {
-                resp = r2;
-            }
-        }
-    }
 
     let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let content_type = resp
@@ -216,13 +174,7 @@ pub async fn chat(State(state): State<Arc<BridgeState>>, body: String) -> Respon
         (upstream, Vec::<u8>::new(), 0u64, 0u64, usage, model_for_usage),
         |(mut up, mut buf, mut prompt_toks, mut comp_toks, usage, model)| async move {
             loop {
-                if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                    let line_bytes: Vec<u8> = buf.drain(..pos).collect();
-                    buf.drain(..1);
-                    let mut line = String::from_utf8_lossy(&line_bytes).into_owned();
-                    if line.ends_with('\r') {
-                        line.pop();
-                    }
+                if let Some(line) = crate::upstream::take_sse_line(&mut buf) {
                     let line = line.trim().to_string();
                     if let Some(data) = line.strip_prefix("data:") {
                         let data = data.trim();
