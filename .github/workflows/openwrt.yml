@@ -135,7 +135,7 @@ jobs:
             bash openwrt/build-ipk.sh \
               "openwrt/out/mimo_desktop_bridge_$ARCH_LABEL" \
               "openwrt/out/$IPK"
-          PKG_VERSION="$ver" PKG_RELEASE=1 \
+          PKG_VERSION="$ver" PKG_RELEASE=1 PKG_ARCH="$PKG_ARCH" \
             bash openwrt/build-apk.sh \
               "openwrt/out/mimo_desktop_bridge_$ARCH_LABEL" \
               "openwrt/out/$APK"
