@@ -9,6 +9,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// `/v1/responses`: try chat-completions compat (MiMo free channel has no native
 /// Responses endpoint). Convert Responses body → chat, call upstream, convert back.
@@ -137,21 +138,7 @@ pub async fn responses(State(state): State<Arc<BridgeState>>, body: String) -> R
     }
 
     if stream {
-        // Stream OpenAI chat SSE through unchanged (client asked for Responses
-        // stream — many clients accept chat-shaped SSE when using the compat
-        // path; full event-type translation is a follow-up if needed).
-        let stream_body = resp.bytes_stream();
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(
-            axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("text/event-stream"),
-        );
-        headers.insert(
-            axum::http::header::HeaderName::from_static("x-accel-buffering"),
-            axum::http::HeaderValue::from_static("no"),
-        );
-        state.usage.record(&model, 0, 0, false);
-        return (headers, axum::body::Body::from_stream(stream_body)).into_response();
+        return responses_stream_from_chat(state, resp, parsed).await;
     }
 
     let chat = match resp.json::<Value>().await {
@@ -175,6 +162,455 @@ pub async fn responses(State(state): State<Arc<BridgeState>>, body: String) -> R
         state.usage.record(&model, 0, 0, false);
     }
     Json(response_from_chat(&parsed, &chat)).into_response()
+}
+
+fn new_id(prefix: &str) -> String {
+    format!("{prefix}_{}", Uuid::new_v4().simple())
+}
+
+/// Translate OpenAI chat-completions SSE into OpenAI Responses SSE events.
+async fn responses_stream_from_chat(
+    state: Arc<BridgeState>,
+    upstream: reqwest::Response,
+    request: Value,
+) -> Response {
+    use bytes::Bytes;
+    use futures_util::StreamExt;
+    use tokio::sync::mpsc;
+
+    let response_id = new_id("resp");
+    let rs_id = new_id("rs");
+    let msg_id = new_id("msg");
+    let created_at = chrono::Utc::now().timestamp();
+    let model = request
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("mimo-flash")
+        .to_string();
+    let model_json = json!(model);
+    let usage_state = state.usage.clone();
+    let model_for_usage = model.clone();
+
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(64);
+    tokio::spawn(async move {
+        let mut seq = 1_i64;
+        let mut text = String::new();
+        let mut reasoning = String::new();
+        let mut usage = Value::Null;
+        let mut buffer = String::new();
+        let mut stream = upstream.bytes_stream();
+        let mut reasoning_opened = false;
+        let mut reasoning_closed = false;
+        let mut message_opened = false;
+        let mut msg_index = 0_i64;
+
+        async fn send(tx: &mpsc::Sender<Result<Bytes, std::io::Error>>, value: Value) {
+            let typ = value
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("message");
+            if let Ok(data) = serde_json::to_string(&value) {
+                let frame = format!("event: {typ}\ndata: {data}\n\n");
+                let _ = tx.send(Ok(Bytes::from(frame))).await;
+            }
+        }
+
+        fn resp_event(
+            typ: &str,
+            seq: i64,
+            status: &str,
+            id: &str,
+            created_at: i64,
+            model: &Value,
+            output: &[Value],
+            output_text: &str,
+            usage: &Value,
+        ) -> Value {
+            json!({
+                "type": typ,
+                "sequence_number": seq,
+                "response": {
+                    "id": id,
+                    "object": "response",
+                    "created_at": created_at,
+                    "status": status,
+                    "model": model,
+                    "output": output,
+                    "output_text": output_text,
+                    "usage": usage,
+                    "error": null,
+                    "incomplete_details": null,
+                }
+            })
+        }
+
+        fn close_reasoning(rs_id: &str, reasoning: &str, seq: &mut i64) -> Vec<Value> {
+            let mut evts = Vec::new();
+            evts.push(json!({
+                "type": "response.reasoning_summary_text.done",
+                "item_id": rs_id, "output_index": 0, "summary_index": 0,
+                "text": reasoning, "sequence_number": *seq,
+            }));
+            *seq += 1;
+            evts.push(json!({
+                "type": "response.reasoning_summary_part.done",
+                "item_id": rs_id, "output_index": 0, "summary_index": 0,
+                "part": {"type": "summary_text", "text": reasoning}, "sequence_number": *seq,
+            }));
+            *seq += 1;
+            evts.push(json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "id": rs_id, "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": reasoning}],
+                    "status": "completed"
+                },
+                "sequence_number": *seq,
+            }));
+            *seq += 1;
+            evts
+        }
+
+        send(
+            &tx,
+            resp_event(
+                "response.created",
+                seq,
+                "in_progress",
+                &response_id,
+                created_at,
+                &model_json,
+                &[],
+                "",
+                &Value::Null,
+            ),
+        )
+        .await;
+        seq += 1;
+        send(
+            &tx,
+            resp_event(
+                "response.in_progress",
+                seq,
+                "in_progress",
+                &response_id,
+                created_at,
+                &model_json,
+                &[],
+                "",
+                &Value::Null,
+            ),
+        )
+        .await;
+        seq += 1;
+
+        while let Some(chunk) = stream.next().await {
+            let Ok(chunk) = chunk else {
+                send(
+                    &tx,
+                    json!({
+                        "type": "error",
+                        "code": "upstream_stream_error",
+                        "message": "upstream stream ended with an error",
+                        "sequence_number": seq,
+                    }),
+                )
+                .await;
+                return;
+            };
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            loop {
+                let Some(pos) = buffer.find('\n') else {
+                    break;
+                };
+                let mut line = buffer[..pos].to_string();
+                buffer = buffer[pos + 1..].to_string();
+                if line.ends_with('\r') {
+                    line.pop();
+                }
+                let line = line.trim().to_string();
+                if line.is_empty() {
+                    continue;
+                }
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
+                let data = data.trim();
+                if data == "[DONE]" {
+                    break;
+                }
+                let Ok(value) = serde_json::from_str::<Value>(data) else {
+                    continue;
+                };
+                if let Some(u) = value.get("usage") {
+                    let p = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let c = u
+                        .get("completion_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    usage = json!({
+                        "input_tokens": p,
+                        "input_tokens_details": {"cached_tokens": 0},
+                        "output_tokens": c,
+                        "output_tokens_details": {
+                            "reasoning_tokens": if reasoning.is_empty() { 0 } else { c }
+                        },
+                        "total_tokens": u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(p + c),
+                    });
+                }
+                let choice = value.pointer("/choices/0").cloned().unwrap_or(Value::Null);
+                let delta = choice.get("delta").cloned().unwrap_or(Value::Null);
+
+                if let Some(piece) = delta
+                    .get("reasoning_content")
+                    .or_else(|| delta.get("reasoning"))
+                    .and_then(|v| v.as_str())
+                {
+                    if !reasoning_opened {
+                        reasoning_opened = true;
+                        send(
+                            &tx,
+                            json!({
+                                "type": "response.output_item.added",
+                                "output_index": 0,
+                                "item": {
+                                    "id": rs_id, "type": "reasoning",
+                                    "summary": [], "status": "in_progress"
+                                },
+                                "sequence_number": seq,
+                            }),
+                        )
+                        .await;
+                        seq += 1;
+                        send(
+                            &tx,
+                            json!({
+                                "type": "response.reasoning_summary_part.added",
+                                "item_id": rs_id,
+                                "output_index": 0,
+                                "summary_index": 0,
+                                "part": {"type": "summary_text", "text": ""},
+                                "sequence_number": seq,
+                            }),
+                        )
+                        .await;
+                        seq += 1;
+                    }
+                    reasoning.push_str(piece);
+                    send(
+                        &tx,
+                        json!({
+                            "type": "response.reasoning_summary_text.delta",
+                            "item_id": rs_id,
+                            "output_index": 0,
+                            "summary_index": 0,
+                            "delta": piece,
+                            "sequence_number": seq,
+                        }),
+                    )
+                    .await;
+                    seq += 1;
+                }
+
+                if let Some(piece) = delta.get("content").and_then(|v| v.as_str()) {
+                    if reasoning_opened && !reasoning_closed {
+                        reasoning_closed = true;
+                        for evt in close_reasoning(&rs_id, &reasoning, &mut seq) {
+                            send(&tx, evt).await;
+                        }
+                    }
+                    if !message_opened {
+                        message_opened = true;
+                        msg_index = if reasoning_opened { 1 } else { 0 };
+                        send(
+                            &tx,
+                            json!({
+                                "type": "response.output_item.added",
+                                "output_index": msg_index,
+                                "item": {
+                                    "id": msg_id, "type": "message",
+                                    "status": "in_progress", "role": "assistant", "content": []
+                                },
+                                "sequence_number": seq,
+                            }),
+                        )
+                        .await;
+                        seq += 1;
+                        send(
+                            &tx,
+                            json!({
+                                "type": "response.content_part.added",
+                                "item_id": msg_id,
+                                "output_index": msg_index,
+                                "content_index": 0,
+                                "part": {"type": "output_text", "text": "", "annotations": []},
+                                "sequence_number": seq,
+                            }),
+                        )
+                        .await;
+                        seq += 1;
+                    }
+                    text.push_str(piece);
+                    send(
+                        &tx,
+                        json!({
+                            "type": "response.output_text.delta",
+                            "item_id": msg_id,
+                            "output_index": msg_index,
+                            "content_index": 0,
+                            "delta": piece,
+                            "sequence_number": seq,
+                        }),
+                    )
+                    .await;
+                    seq += 1;
+                }
+            }
+        }
+
+        if usage.is_null() {
+            usage = json!({
+                "input_tokens": 0,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 0,
+            });
+        }
+        // Token accounting from final usage
+        let p = usage
+            .pointer("/input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let c = usage
+            .pointer("/output_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        usage_state.record_tokens(&model_for_usage, p, c);
+
+        if reasoning_opened && !reasoning_closed {
+            reasoning_closed = true;
+            for evt in close_reasoning(&rs_id, &reasoning, &mut seq) {
+                send(&tx, evt).await;
+            }
+        }
+        if !message_opened {
+            message_opened = true;
+            msg_index = if reasoning_opened { 1 } else { 0 };
+            send(
+                &tx,
+                json!({
+                    "type": "response.output_item.added",
+                    "output_index": msg_index,
+                    "item": {
+                        "id": msg_id, "type": "message",
+                        "status": "in_progress", "role": "assistant", "content": []
+                    },
+                    "sequence_number": seq,
+                }),
+            )
+            .await;
+            seq += 1;
+            send(
+                &tx,
+                json!({
+                    "type": "response.content_part.added",
+                    "item_id": msg_id,
+                    "output_index": msg_index,
+                    "content_index": 0,
+                    "part": {"type": "output_text", "text": "", "annotations": []},
+                    "sequence_number": seq,
+                }),
+            )
+            .await;
+            seq += 1;
+        }
+        send(
+            &tx,
+            json!({
+                "type": "response.output_text.done",
+                "item_id": msg_id,
+                "output_index": msg_index,
+                "content_index": 0,
+                "text": text,
+                "sequence_number": seq,
+            }),
+        )
+        .await;
+        seq += 1;
+        send(
+            &tx,
+            json!({
+                "type": "response.content_part.done",
+                "item_id": msg_id,
+                "output_index": msg_index,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": text, "annotations": []},
+                "sequence_number": seq,
+            }),
+        )
+        .await;
+        seq += 1;
+        send(
+            &tx,
+            json!({
+                "type": "response.output_item.done",
+                "output_index": msg_index,
+                "item": {
+                    "id": msg_id, "type": "message", "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text, "annotations": []}]
+                },
+                "sequence_number": seq,
+            }),
+        )
+        .await;
+        seq += 1;
+
+        let mut final_output = Vec::new();
+        if !reasoning.is_empty() {
+            final_output.push(json!({
+                "id": rs_id, "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": reasoning}],
+                "status": "completed",
+            }));
+        }
+        final_output.push(json!({
+            "id": msg_id, "type": "message", "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }));
+        send(
+            &tx,
+            resp_event(
+                "response.completed",
+                seq,
+                "completed",
+                &response_id,
+                created_at,
+                &model_json,
+                &final_output,
+                &text,
+                &usage,
+            ),
+        )
+        .await;
+    });
+
+    let body_stream = futures_util::stream::unfold(rx, |mut rx| async {
+        rx.recv().await.map(|item| (item, rx))
+    });
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/event-stream"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    (headers, axum::body::Body::from_stream(body_stream)).into_response()
 }
 
 /// Responses request body → OpenAI chat.completions body.
