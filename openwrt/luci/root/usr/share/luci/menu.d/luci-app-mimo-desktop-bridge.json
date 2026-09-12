@@ -1,0 +1,9 @@
+{
+	"admin": {
+		"services": {
+			"mimo_desktop_bridge": {
+				"path": "admin/services/mimo_desktop_bridge"
+			}
+		}
+	}
+}

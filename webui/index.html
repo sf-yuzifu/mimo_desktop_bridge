@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mimo_desktop_bridge</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #171a21;
+      --border: #2a2f3a;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --accent: #ff6900;
+      --ok: #34a853;
+      --err: #ea4335;
+      --warn: #fbbc04;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 20px 28px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 18px; font-weight: 600; margin: 0; }
+    header .tag {
+      font-size: 12px;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 999px;
+      padding: 2px 10px;
+    }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 24px 20px 60px;
+      display: grid;
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .grow { flex: 1; min-width: 180px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    input, select {
+      width: 100%;
+      background: #0c0e12;
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+    input:focus, select:focus { outline: 1px solid var(--accent); }
+    button {
+      background: var(--accent);
+      color: #111;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted);
+    }
+    .dot.ok { background: var(--ok); }
+    .dot.err { background: var(--err); }
+    .dot.warn { background: var(--warn); }
+    .muted { color: var(--muted); font-size: 13px; }
+    .mono {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 12px;
+      background: #0c0e12;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      word-break: break-all;
+    }
+    .hidden { display: none !important; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; }
+    .msg { font-size: 13px; min-height: 18px; }
+    .msg.ok { color: var(--ok); }
+    .msg.err { color: var(--err); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>mimo_desktop_bridge</h1>
+    <span class="tag">free channel · sid=mimopc</span>
+    <span class="muted" style="margin-left:auto" id="base-url"></span>
+  </header>
+  <main>
+    <section class="card">
+      <h2>Xiaomi Account</h2>
+      <div id="auth-logged-out">
+        <div class="row">
+          <div class="grow">
+            <label>Account (phone / email)</label>
+            <input id="account" autocomplete="username" placeholder="138… or you@example.com" />
+          </div>
+          <div class="grow">
+            <label>Password</label>
+            <input id="password" type="password" autocomplete="current-password" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button id="btn-login">Sign in</button>
+          <span class="muted">2FA (SMS) is supported on the next step.</span>
+        </div>
+      </div>
+      <div id="auth-2fa" class="hidden">
+        <p class="muted">Verification code sent. Choose the option your phone received.</p>
+        <div class="row">
+          <div class="grow">
+            <label>Method</label>
+            <select id="twofa-flag">
+              <option value="4">Phone SMS (4)</option>
+              <option value="8">Email (8)</option>
+            </select>
+          </div>
+          <div class="grow">
+            <label>Code</label>
+            <input id="twofa-ticket" placeholder="6-digit code" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button id="btn-send-ticket" class="secondary">Send code</button>
+          <button id="btn-verify-ticket">Verify</button>
+          <button id="btn-cancel-2fa" class="secondary">Cancel</button>
+        </div>
+      </div>
+      <div id="auth-logged-in" class="hidden">
+        <div class="status"><span class="dot ok"></span> Signed in</div>
+        <p class="muted" id="auth-user" style="margin:8px 0 12px"></p>
+        <div class="row">
+          <button id="btn-refresh" class="secondary">Refresh token</button>
+          <button id="btn-logout" class="secondary">Sign out</button>
+        </div>
+      </div>
+      <div class="msg" id="auth-msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>Proxy</h2>
+      <div class="status" id="proxy-status"><span class="dot"></span> checking…</div>
+      <p class="muted" style="margin:10px 0 0">
+        OpenAI base URL for clients (opencode, Cline, …):
+      </p>
+      <div class="mono" id="v1-base" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:12px">
+        <button id="btn-probe" class="secondary">Probe /user/xiaomi/me</button>
+      </div>
+      <pre class="mono hidden" id="probe-out" style="margin-top:10px;white-space:pre-wrap"></pre>
+    </section>
+
+    <section class="card hidden" id="admin-setup-card">
+      <h2>Admin Setup</h2>
+      <p class="muted">Optional: set an admin password to protect the control plane (API keys, settings). Skip on localhost-only use.</p>
+      <div class="row">
+        <div class="grow">
+          <label>Admin password (min 6 chars)</label>
+          <input id="admin-password" type="password" autocomplete="new-password" />
+        </div>
+        <button id="btn-admin-setup" style="align-self:end">Save</button>
+      </div>
+      <div class="msg" id="admin-msg"></div>
+    </section>
+
+    <section class="card hidden" id="admin-login-card">
+      <h2>Admin Login</h2>
+      <p class="muted">Control plane is locked. Sign in to manage API keys and settings.</p>
+      <div class="row">
+        <div class="grow">
+          <label>Password</label>
+          <input id="admin-login-password" type="password" autocomplete="current-password" />
+        </div>
+        <button id="btn-admin-login" style="align-self:end">Sign in</button>
+      </div>
+      <div class="msg" id="admin-login-msg"></div>
+    </section>
+
+    <section class="card hidden" id="admin-session-card">
+      <h2>Admin</h2>
+      <div class="status"><span class="dot ok"></span> Control plane unlocked</div>
+      <div class="row" style="margin-top:12px">
+        <button id="btn-admin-logout" class="secondary">Sign out</button>
+      </div>
+      <details style="margin-top:14px">
+        <summary class="muted" style="cursor:pointer">Change password</summary>
+        <div class="row" style="margin-top:10px">
+          <div class="grow">
+            <label>Old password</label>
+            <input id="admin-old-password" type="password" autocomplete="current-password" />
+          </div>
+          <div class="grow">
+            <label>New password</label>
+            <input id="admin-new-password" type="password" autocomplete="new-password" />
+          </div>
+          <button id="btn-admin-change" style="align-self:end" class="secondary">Update</button>
+        </div>
+        <div class="msg" id="admin-change-msg"></div>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>API Keys</h2>
+      <p class="muted" id="keys-hint">Optional. Enable “require API key” to protect /v1.</p>
+      <div class="row" style="margin:10px 0">
+        <div class="grow">
+          <label>Label</label>
+          <input id="key-label" placeholder="opencode" />
+        </div>
+        <button id="btn-create-key" style="align-self:end">Create key</button>
+      </div>
+      <div class="msg" id="keys-msg"></div>
+      <div class="mono hidden" id="new-key" style="margin:8px 0"></div>
+      <table>
+        <thead><tr><th>Prefix</th><th>Label</th><th></th></tr></thead>
+        <tbody id="keys-body"></tbody>
+      </table>
+      <div class="row" style="margin-top:12px">
+        <label class="row" style="gap:8px;align-items:center">
+          <input type="checkbox" id="require-key" style="width:auto" />
+          <span>Require API key on /v1</span>
+        </label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Usage</h2>
+      <div id="usage-body" class="muted">loading…</div>
+    </section>
+
+    <section class="card">
+      <h2>Request Logs</h2>
+      <p class="muted">Live proxy traffic. Newest first.</p>
+      <pre class="mono" id="logs-body" style="max-height:280px;overflow:auto;white-space:pre-wrap;margin:0">loading…</pre>
+    </section>
+
+    <section class="card">
+      <h2>Models</h2>
+      <div id="models" class="muted">loading…</div>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const base = location.origin;
+    $("base-url").textContent = base;
+    $("v1-base").textContent = base + "/v1";
+
+    async function api(path, opts = {}) {
+      const r = await fetch(path, {
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+        ...opts,
+      });
+      let data = null;
+      try { data = await r.json(); } catch {}
+      return { ok: r.ok, status: r.status, data };
+    }
+
+    function setMsg(el, text, cls) {
+      el.textContent = text || "";
+      el.className = "msg" + (cls ? " " + cls : "");
+    }
+
+    async function refreshAuth() {
+      const { data } = await api("/api/auth/status");
+      const loggedIn = !!data?.loggedIn;
+      $("auth-logged-out").classList.toggle("hidden", loggedIn || !$("auth-2fa").classList.contains("hidden"));
+      $("auth-logged-in").classList.toggle("hidden", !loggedIn);
+      if (loggedIn) {
+        $("auth-user").textContent =
+          `userId=${data.userId || "?"}  nick=${data.nick || "-"}  sid=${data.sid}`;
+      }
+    }
+
+    async function refreshProxy() {
+      const { data } = await api("/api/proxy/status");
+      const el = $("proxy-status");
+      if (!data) {
+        el.innerHTML = '<span class="dot err"></span> unreachable';
+        return;
+      }
+      if (data.loggedIn) {
+        el.innerHTML = `<span class="dot ok"></span> logged in · serviceToken ready`;
+      } else if (data.hasPassToken) {
+        el.innerHTML = `<span class="dot warn"></span> passToken only — click Refresh token`;
+      } else {
+        el.innerHTML = `<span class="dot err"></span> not logged in`;
+      }
+    }
+
+    async function refreshModels() {
+      const { data } = await api("/api/models");
+      const list = data?.data || [];
+      $("models").innerHTML = list
+        .map((m) => `<div class="mono" style="margin-bottom:6px">${m.id} — ${m.name || ""}</div>`)
+        .join("");
+    }
+
+    async function refreshKeys() {
+      const { data } = await api("/api/keys");
+      const rows = data?.keys || [];
+      $("keys-body").innerHTML = rows
+        .map(
+          (k) =>
+            `<tr><td class="mono">${k.prefix}…</td><td>${k.label}</td><td><button class="secondary" data-del="${k.id}">Revoke</button></td></tr>`
+        )
+        .join("") || `<tr><td colspan="3" class="muted">no keys</td></tr>`;
+      $("keys-body").querySelectorAll("[data-del]").forEach((btn) => {
+        btn.onclick = async () => {
+          await api("/api/keys/" + btn.dataset.del, { method: "DELETE" });
+          refreshKeys();
+        };
+      });
+      const req = await api("/api/settings/api-key-required");
+      $("require-key").checked = !!req.data?.required;
+    }
+
+    $("btn-login").onclick = async () => {
+      setMsg($("auth-msg"), "Signing in…");
+      const { data, ok, status } = await api("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          account: $("account").value.trim(),
+          password: $("password").value,
+        }),
+      });
+      if (ok && data?.outcome === "authenticated") {
+        setMsg($("auth-msg"), "Signed in", "ok");
+        $("password").value = "";
+        await Promise.all([refreshAuth(), refreshProxy()]);
+        return;
+      }
+      if (data?.outcome === "two_factor_required") {
+        $("auth-logged-out").classList.add("hidden");
+        $("auth-2fa").classList.remove("hidden");
+        const opts = data.options || [];
+        if (opts.length === 1) $("twofa-flag").value = String(opts[0]);
+        setMsg($("auth-msg"), "2FA required — send a code", "");
+        return;
+      }
+      setMsg($("auth-msg"), data?.error?.message || `login failed (${status})`, "err");
+    };
+
+    $("btn-send-ticket").onclick = async () => {
+      setMsg($("auth-msg"), "Sending code…");
+      const flag = Number($("twofa-flag").value);
+      const { ok, data } = await api("/api/auth/two-factor/send", {
+        method: "POST",
+        body: JSON.stringify({ flag }),
+      });
+      if (ok) setMsg($("auth-msg"), "Code sent — check your phone", "ok");
+      else setMsg($("auth-msg"), data?.error?.message || "send failed", "err");
+    };
+
+    $("btn-verify-ticket").onclick = async () => {
+      setMsg($("auth-msg"), "Verifying…");
+      const flag = Number($("twofa-flag").value);
+      const ticket = $("twofa-ticket").value.trim();
+      const { ok, data, status } = await api("/api/auth/two-factor/verify", {
+        method: "POST",
+        body: JSON.stringify({ flag, ticket }),
+      });
+      if (ok) {
+        $("auth-2fa").classList.add("hidden");
+        setMsg($("auth-msg"), "Signed in", "ok");
+        await Promise.all([refreshAuth(), refreshProxy()]);
+      } else {
+        setMsg($("auth-msg"), data?.error?.message || `verify failed (${status})`, "err");
+      }
+    };
+
+    $("btn-cancel-2fa").onclick = () => {
+      $("auth-2fa").classList.add("hidden");
+      $("auth-logged-out").classList.remove("hidden");
+      setMsg($("auth-msg"), "");
+    };
+
+    $("btn-refresh").onclick = async () => {
+      setMsg($("auth-msg"), "Refreshing serviceToken…");
+      const { ok, data } = await api("/api/auth/refresh", { method: "POST" });
+      if (ok) setMsg($("auth-msg"), "Token refreshed", "ok");
+      else setMsg($("auth-msg"), data?.error?.message || "refresh failed", "err");
+      refreshProxy();
+    };
+
+    $("btn-logout").onclick = async () => {
+      await api("/api/auth/logout", { method: "POST" });
+      setMsg($("auth-msg"), "Signed out");
+      await Promise.all([refreshAuth(), refreshProxy()]);
+    };
+
+    $("btn-probe").onclick = async () => {
+      const el = $("probe-out");
+      el.classList.remove("hidden");
+      el.textContent = "probing…";
+      const { data } = await api("/api/proxy/status");
+      el.textContent = JSON.stringify(data, null, 2);
+    };
+
+    $("btn-create-key").onclick = async () => {
+      setMsg($("keys-msg"), "");
+      const { ok, data } = await api("/api/keys", {
+        method: "POST",
+        body: JSON.stringify({ label: $("key-label").value.trim() }),
+      });
+      if (ok && data?.token) {
+        $("new-key").classList.remove("hidden");
+        $("new-key").textContent = data.token;
+        setMsg($("keys-msg"), "Key created — copy it now", "ok");
+        $("key-label").value = "";
+        refreshKeys();
+      } else {
+        setMsg($("keys-msg"), data?.error?.message || "create failed", "err");
+      }
+    };
+
+    $("require-key").onchange = async () => {
+      await api("/api/settings/api-key-required", {
+        method: "POST",
+        body: JSON.stringify({ required: $("require-key").checked }),
+      });
+    };
+
+    async function refreshUsage() {
+      const { data } = await api("/api/usage");
+      const models = data?.models || {};
+      const total = data?.total || {};
+      const rows = Object.entries(models)
+        .map(([id, u]) => `<tr><td class="mono">${id}</td><td>${u.requests}</td><td>${u.total_tokens}</td><td>${u.errors}</td></tr>`)
+        .join("");
+      $("usage-body").innerHTML = `
+        <p class="muted">total requests=${total.requests || 0} · tokens=${total.total_tokens || 0} · errors=${total.errors || 0}</p>
+        <table>
+          <thead><tr><th>Model</th><th>Req</th><th>Tokens</th><th>Err</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="4" class="muted">no traffic yet</td></tr>'}</tbody>
+        </table>`;
+    }
+
+    async function refreshAdminSetup() {
+      const { data } = await api("/api/admin/session");
+      const setup = $("admin-setup-card");
+      const login = $("admin-login-card");
+      const session = $("admin-session-card");
+      setup.classList.add("hidden");
+      login.classList.add("hidden");
+      session.classList.add("hidden");
+      if (!data) return;
+      if (data.configured === false) {
+        setup.classList.remove("hidden");
+      } else if (data.authenticated) {
+        session.classList.remove("hidden");
+      } else {
+        login.classList.remove("hidden");
+      }
+    }
+
+    $("btn-admin-setup").onclick = async () => {
+      const password = $("admin-password").value;
+      const { ok, data } = await api("/api/admin/setup", {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      });
+      if (ok) {
+        setMsg($("admin-msg"), "Admin password saved", "ok");
+        $("admin-password").value = "";
+        refreshAdminSetup();
+      } else {
+        setMsg($("admin-msg"), data?.error?.message || "setup failed", "err");
+      }
+    };
+
+    $("btn-admin-login").onclick = async () => {
+      const password = $("admin-login-password").value;
+      const { ok, data } = await api("/api/admin/login", {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      });
+      if (ok) {
+        setMsg($("admin-login-msg"), "Signed in", "ok");
+        $("admin-login-password").value = "";
+        refreshAdminSetup();
+        refreshKeys();
+      } else {
+        setMsg($("admin-login-msg"), data?.error?.message || "login failed", "err");
+      }
+    };
+
+    $("btn-admin-logout").onclick = async () => {
+      await api("/api/admin/logout", { method: "POST" });
+      refreshAdminSetup();
+    };
+
+    $("btn-admin-change").onclick = async () => {
+      const old_password = $("admin-old-password").value;
+      const new_password = $("admin-new-password").value;
+      const { ok, data } = await api("/api/admin/password", {
+        method: "POST",
+        body: JSON.stringify({ old_password, new_password }),
+      });
+      if (ok) {
+        setMsg($("admin-change-msg"), "Password updated", "ok");
+        $("admin-old-password").value = "";
+        $("admin-new-password").value = "";
+        refreshAdminSetup();
+      } else {
+        setMsg($("admin-change-msg"), data?.error?.message || "update failed", "err");
+      }
+    };
+
+    async function refreshLogs() {
+      try {
+        const r = await fetch("/api/logs");
+        const rows = await r.json();
+        const lines = (rows || []).slice(0, 40).map((e) => {
+          const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : "";
+          const kind = e.kind || "?";
+          const path = e.path || "";
+          const extra = e.status ? ` status=${e.status}` : e.message ? ` ${e.message}` : "";
+          const model = e.model ? ` model=${e.model}` : "";
+          const ms = e.elapsed_ms != null ? ` ${e.elapsed_ms}ms` : "";
+          return `${ts} [${kind}] ${path}${model}${extra}${ms}`;
+        });
+        $("logs-body").textContent = lines.join("\n") || "no traffic yet";
+      } catch {
+        $("logs-body").textContent = "log fetch failed";
+      }
+    }
+
+    refreshAuth();
+    refreshProxy();
+    refreshModels();
+    refreshKeys();
+    refreshUsage();
+    refreshAdminSetup();
+    refreshLogs();
+    setInterval(refreshProxy, 15000);
+    setInterval(refreshUsage, 30000);
+    setInterval(refreshLogs, 5000);
+  </script>
+</body>
+</html>

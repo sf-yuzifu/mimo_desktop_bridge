@@ -1,0 +1,21 @@
+node_modules
+dist
+dist-ssr
+*.local
+.cache
+target-local
+openwrt/out
+
+# editors
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+
+# rust
+target
+gen
+
+# build artifacts
+*.log
+target-musl

@@ -1,0 +1,14 @@
+{
+	"luci-app-mimo-desktop-bridge": {
+		"description": "Grant access to MiMo Desktop Bridge WebUI iframe",
+		"read": {
+			"ubus": {
+				"service": [ "list" ]
+			},
+			"uci": [ "mimo_desktop_bridge" ]
+		},
+		"write": {
+			"uci": [ "mimo_desktop_bridge" ]
+		}
+	}
+}

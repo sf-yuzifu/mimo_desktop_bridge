@@ -1,0 +1,16 @@
+config mimo_desktop_bridge 'main'
+	# 1 = start at boot, 0 = disabled
+	option enabled '1'
+	# Bind address. 0.0.0.0 so the LuCI iframe (and LAN) can reach it.
+	# Use 127.0.0.1 to restrict to the router itself.
+	option host '0.0.0.0'
+	# WebUI + OpenAI/Anthropic proxy port.
+	option port '8787'
+	# 1 = RUST_LOG debug, 0 = info
+	option verbose '0'
+	# 1 = serve over HTTPS (self-signed cert auto-generated on first start),
+	# 0 = plain HTTP.
+	option tls '0'
+	# Optional: use your own PEM cert/key instead of the self-signed one.
+	#option tls_cert '/etc/mimo_desktop_bridge/cert.pem'
+	#option tls_key '/etc/mimo_desktop_bridge/key.pem'

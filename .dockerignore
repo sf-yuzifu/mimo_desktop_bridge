@@ -1,0 +1,9 @@
+.git
+.cache
+.DS_Store
+node_modules
+dist
+target-local
+target
+gen
+*.log

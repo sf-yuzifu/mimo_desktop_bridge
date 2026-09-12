@@ -1,0 +1,59 @@
+[package]
+name = "mimo_desktop_bridge"
+version = "0.1.0"
+description = "Bridge Xiaomi MiMo Desktop free account channel into local OpenAI-compatible APIs"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "mimo_desktop_bridge_lib"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "mimo_desktop_bridge"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.41", features = ["full", "sync"] }
+futures-util = "0.3"
+bytes = "1.8"
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "gzip"] }
+url = "2.5"
+
+axum = { version = "0.7", features = ["json", "macros"] }
+# TLS for the local server (self-signed or user-provided PEM)
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+hyper = "1.5"
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+rand = "0.8"
+argon2 = "0.5"
+
+directories = "5.0"
+thiserror = "2.0"
+anyhow = "1.0"
+once_cell = "1.20"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.11", features = ["v4"] }
+parking_lot = "0.12"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+rust-embed = "8.5"
+mime_guess = "2.0"
+open = "5.3"
+
+[features]
+default = []
