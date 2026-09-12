@@ -66,6 +66,20 @@ pub struct KeyStore {
     pub keys: Vec<ApiKeyRecord>,
 }
 
+/// Config files may hold secrets (session.json has passToken in cleartext).
+/// Keep them owner-only on Unix; a no-op elsewhere.
+pub fn restrict_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+            tracing::warn!("chmod 600 {}: {e}", path.display());
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 pub struct Storage {
     config_dir: PathBuf,
     settings: RwLock<Settings>,
@@ -139,6 +153,7 @@ impl Storage {
         let tmp = path.with_extension("tmp");
         let s = serde_json::to_string_pretty(value)?;
         std::fs::write(&tmp, s)?;
+        restrict_permissions(&tmp);
         std::fs::rename(&tmp, path)?;
         Ok(())
     }

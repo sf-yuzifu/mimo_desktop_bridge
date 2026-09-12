@@ -87,6 +87,7 @@ async fn load_or_make_tls(state: &Arc<BridgeState>) -> Result<axum_server::tls_r
             .map_err(|e| BridgeError::Proxy(e.to_string()))?;
         std::fs::write(&cert_path, generated.cert.pem())?;
         std::fs::write(&key_path, generated.key_pair.serialize_pem())?;
+        crate::storage::restrict_permissions(&key_path);
         tracing::info!(
             target = "server",
             "generated self-signed TLS cert at {}",
