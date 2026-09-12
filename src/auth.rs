@@ -410,15 +410,10 @@ pub async fn login_auth2(
         let list_text = list_resp.text().await?;
         let list_json: serde_json::Value = serde_json::from_str(strip_prefix(&list_text))
             .map_err(|e| BridgeError::Login(format!("identity/list parse: {e}")))?;
-        if list_json
+        let hardware_2fa = list_json
             .get("twoFactorAuth")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
-            return Err(BridgeError::Login(
-                "hardware 2FA is not supported".into(),
-            ));
-        }
+            .unwrap_or(false);
         let options: Vec<i32> = list_json
             .get("options")
             .and_then(|v| v.as_array())
@@ -428,8 +423,34 @@ pub async fn login_auth2(
                     .collect()
             })
             .unwrap_or_default();
+
+        // twoFactorAuth=true often means a security key is enrolled. Software
+        // options (4=SMS, 8=email) can still be listed — prefer those so login
+        // works. Only refuse when hardware is the *only* path.
         if options.is_empty() {
-            return Err(BridgeError::Login("identity/list returned no options".into()));
+            if hardware_2fa {
+                return Err(BridgeError::Login(
+                    "this Xiaomi account requires a hardware security key (FIDO/U2F). \
+                     Password login cannot complete it. Disable hardware 2FA at \
+                     https://account.xiaomi.com (安全中心 → 登录与安全 → 两步验证) \
+                     and use SMS/email 2FA instead, then retry."
+                        .into(),
+                ));
+            }
+            let keys: Vec<String> = match &list_json {
+                serde_json::Value::Object(m) => m.keys().cloned().collect(),
+                _ => vec![],
+            };
+            return Err(BridgeError::Login(format!(
+                "identity/list returned no 2FA options (keys=[{}])",
+                keys.join(",")
+            )));
+        }
+        if hardware_2fa {
+            tracing::warn!(
+                "identity/list: hardware 2FA enrolled, but software options {:?} are available — using those",
+                options
+            );
         }
         let flow = TwoFactorFlow {
             options: options.clone(),
