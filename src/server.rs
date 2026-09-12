@@ -515,14 +515,11 @@ async fn api_verify_ticket(
 }
 
 async fn api_refresh(State(state): State<Arc<BridgeState>>) -> Response {
-    let Some(mut session) = state.storage.session() else {
+    if state.storage.session().is_none() {
         return err_json(StatusCode::UNAUTHORIZED, "not logged in", "unauthorized");
-    };
-    match crate::auth::mint_service_token(&state.http, &mut session).await {
-        Ok(()) => {
-            let _ = state.storage.save_session(session);
-            Json(json!({ "ok": true })).into_response()
-        }
+    }
+    match state.refresh_session(true).await {
+        Ok(_) => Json(json!({ "ok": true })).into_response(),
         Err(e) => err_json(e.status(), &e.to_string(), e.code()),
     }
 }

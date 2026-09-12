@@ -161,16 +161,9 @@ async fn call_upstream(
         })?;
 
     if resp.status() == 401 {
-        if let Some(mut s) = state.storage.session() {
-            if s.pass_token.is_some()
-                && crate::auth::mint_service_token(&state.http, &mut s)
-                    .await
-                    .is_ok()
-            {
-                let _ = state.storage.save_session(s.clone());
-                if let Ok(r2) = send(s.business_cookie()).await {
-                    resp = r2;
-                }
+        if let Ok(s) = state.refresh_session(false).await {
+            if let Ok(r2) = send(s.business_cookie()).await {
+                resp = r2;
             }
         }
     }

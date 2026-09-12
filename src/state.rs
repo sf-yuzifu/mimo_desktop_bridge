@@ -1,5 +1,6 @@
 //! Shared bridge state.
 
+use crate::error::{BridgeError, Result};
 use crate::storage::Storage;
 use crate::usage::Usage;
 use parking_lot::Mutex;
@@ -19,7 +20,12 @@ pub struct BridgeState {
     /// Admin session tokens (cookie value → issued-at ms).
     pub admin_sessions: Mutex<Vec<(String, i64)>>,
     pub bound_addr: Mutex<Option<SocketAddr>>,
+    /// Serializes serviceToken refresh so concurrent 401s mint once.
+    refresh_lock: tokio::sync::Mutex<()>,
 }
+
+/// Skip re-minting if another request refreshed within this window.
+const REFRESH_DEDUP_MS: i64 = 60_000;
 
 impl BridgeState {
     pub fn new(storage: Arc<Storage>) -> Self {
@@ -45,7 +51,34 @@ impl BridgeState {
             two_factor: Mutex::new(None),
             admin_sessions: Mutex::new(Vec::new()),
             bound_addr: Mutex::new(None),
+            refresh_lock: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// Mint a fresh serviceToken and persist it.
+    ///
+    /// Single-flight: concurrent callers serialize on an internal lock. With
+    /// `force=false` (401 retry path) a caller that lost the race reuses the
+    /// session another request just saved instead of minting again.
+    pub async fn refresh_session(&self, force: bool) -> Result<crate::auth::Session> {
+        let _guard = self.refresh_lock.lock().await;
+        let Some(mut s) = self.storage.session() else {
+            return Err(BridgeError::Unauthorized);
+        };
+        if s.pass_token.is_none() {
+            return Err(BridgeError::Login("no passToken to refresh with".into()));
+        }
+        if !force {
+            if let Some(at) = s.refreshed_at {
+                let fresh = chrono::Utc::now().timestamp_millis() - at < REFRESH_DEDUP_MS;
+                if fresh && s.service_token.is_some() {
+                    return Ok(s);
+                }
+            }
+        }
+        crate::auth::mint_service_token(&self.http, &mut s).await?;
+        let _ = self.storage.save_session(s.clone());
+        Ok(s)
     }
 
     pub fn set_bound_addr(&self, addr: SocketAddr) {
