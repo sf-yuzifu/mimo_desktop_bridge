@@ -223,6 +223,12 @@ fn clear_cookie_header() -> String {
 
 pub fn router(state: Arc<BridgeState>) -> Router {
     let api = Router::new()
+        // Control-plane routes that must work WITHOUT an admin session
+        // (login gate + first-run setup).
+        .route("/api/admin/session", get(api_admin_session))
+        .route("/api/admin/setup", post(api_admin_setup))
+        .route("/api/admin/login", post(api_admin_login))
+        // Xiaomi account auth + status — require admin once configured.
         .route("/api/auth/status", get(api_auth_status))
         .route("/api/auth/login", post(api_login))
         .route("/api/auth/two-factor/send", post(api_send_ticket))
@@ -231,9 +237,6 @@ pub fn router(state: Arc<BridgeState>) -> Router {
         .route("/api/auth/logout", post(api_logout))
         .route("/api/proxy/status", get(crate::proxy::proxy_status))
         .route("/api/models", get(api_models))
-        .route("/api/admin/session", get(api_admin_session))
-        .route("/api/admin/setup", post(api_admin_setup))
-        .route("/api/admin/login", post(api_admin_login))
         .route("/api/admin/logout", post(api_admin_logout))
         .route("/api/admin/password", post(api_admin_password))
         .route("/api/keys", get(api_keys_list).post(api_keys_create))
@@ -249,7 +252,12 @@ pub fn router(state: Arc<BridgeState>) -> Router {
             get(api_tls_get).post(api_tls_set),
         )
         .route("/api/logs", get(api_logs))
-        .route("/api/logs/stream", get(api_logs_stream));
+        .route("/api/logs/stream", get(api_logs_stream))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            admin_guard,
+        ))
+        .with_state(state.clone());
 
     let proxy = Router::new()
         .route("/v1/models", get(crate::proxy::models))
@@ -265,6 +273,38 @@ pub fn router(state: Arc<BridgeState>) -> Router {
         .fallback(static_asset)
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+/// Paths that must stay reachable without an admin session.
+fn admin_open_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/admin/session" | "/api/admin/setup" | "/api/admin/login"
+    )
+}
+
+/// Once an admin password is set, everything under /api (except the login
+/// gate itself) requires a valid mdb_session cookie.
+async fn admin_guard(
+    State(state): State<Arc<BridgeState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if !state.storage.admin_configured() {
+        return next.run(req).await;
+    }
+    let path = req.uri().path();
+    if admin_open_path(path) {
+        return next.run(req).await;
+    }
+    if admin_ok(&state, req.headers()) {
+        return next.run(req).await;
+    }
+    err_json(
+        StatusCode::UNAUTHORIZED,
+        "admin session required — unlock the WebUI first",
+        "unauthorized",
+    )
 }
 
 async fn api_key_guard(
@@ -296,9 +336,31 @@ async fn api_key_guard(
     }
 }
 
-async fn static_asset(uri: axum::http::Uri) -> Response {
+async fn static_asset(
+    State(state): State<Arc<BridgeState>>,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
+
+    // Admin gate: when a password is set, the full WebUI (and its assets)
+    // stay hidden until unlock. /v1 is unaffected (separate router).
+    if state.storage.admin_configured() && !admin_ok(&state, &headers) {
+        return match Assets::get("login.html") {
+            Some(f) => (
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                f.data.into_owned(),
+            )
+                .into_response(),
+            None => (
+                StatusCode::UNAUTHORIZED,
+                "admin session required",
+            )
+                .into_response(),
+        };
+    }
+
     match Assets::get(path) {
         Some(f) => {
             let mime = mime_guess::from_path(path)

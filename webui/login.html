@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mimo_desktop_bridge · Unlock</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #171a21;
+      --border: #2a2f3a;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --accent: #ff6900;
+      --err: #ea4335;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .card {
+      width: min(400px, calc(100% - 32px));
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px 24px;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 18px;
+      font-weight: 600;
+    }
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+      margin: 0 0 18px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    input {
+      width: 100%;
+      background: #0c0e12;
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 11px 12px;
+      font-size: 14px;
+    }
+    input:focus { outline: 1px solid var(--accent); }
+    button {
+      width: 100%;
+      margin-top: 14px;
+      background: var(--accent);
+      color: #111;
+      border: 0;
+      border-radius: 8px;
+      padding: 11px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .msg {
+      min-height: 18px;
+      margin-top: 12px;
+      font-size: 13px;
+      color: var(--err);
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>mimo_desktop_bridge</h1>
+    <p class="muted">Control plane is locked. Enter the admin password to continue.</p>
+    <form id="f">
+      <label for="password">Admin password</label>
+      <input id="password" type="password" autocomplete="current-password" autofocus />
+      <button type="submit" id="btn">Unlock</button>
+    </form>
+    <div class="msg" id="msg"></div>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    $("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const password = $("password").value;
+      if (!password) return;
+      $("btn").disabled = true;
+      $("msg").textContent = "";
+      try {
+        const r = await fetch("/api/admin/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password }),
+        });
+        if (r.ok) {
+          location.reload();
+          return;
+        }
+        let message = "login failed";
+        try {
+          const data = await r.json();
+          message = data?.error?.message || message;
+        } catch {}
+        $("msg").textContent = message;
+      } catch (err) {
+        $("msg").textContent = String(err);
+      } finally {
+        $("btn").disabled = false;
+        $("password").select();
+      }
+    });
+  </script>
+</body>
+</html>
