@@ -82,9 +82,9 @@
 <body>
   <div class="card">
     <h1>mimo_desktop_bridge</h1>
-    <p class="muted">Control plane is locked. Enter the admin password to continue.</p>
+    <p class="muted" id="note">Control plane is locked. Enter the admin password to continue.</p>
     <form id="f">
-      <label for="password">Admin password</label>
+      <label for="password" id="label">Admin password</label>
       <input id="password" type="password" autocomplete="current-password" autofocus />
       <button type="submit" id="btn">Unlock</button>
     </form>
@@ -92,6 +92,23 @@
   </div>
   <script>
     const $ = (id) => document.getElementById(id);
+    // First run on an exposed (non-loopback) bind: the control plane is
+    // locked until an admin password exists — offer to create one here.
+    let setupMode = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/admin/session");
+        const d = await r.json();
+        if (d && d.configured === false) {
+          setupMode = true;
+          $("note").textContent =
+            "First run: this bridge is reachable from the network. Create an admin password to protect it.";
+          $("label").textContent = "New admin password (min 6 chars)";
+          $("password").autocomplete = "new-password";
+          $("btn").textContent = "Create password";
+        }
+      } catch {}
+    })();
     $("f").addEventListener("submit", async (e) => {
       e.preventDefault();
       const password = $("password").value;
@@ -99,7 +116,7 @@
       $("btn").disabled = true;
       $("msg").textContent = "";
       try {
-        const r = await fetch("/api/admin/login", {
+        const r = await fetch(setupMode ? "/api/admin/setup" : "/api/admin/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ password }),
@@ -108,7 +125,7 @@
           location.reload();
           return;
         }
-        let message = "login failed";
+        let message = setupMode ? "setup failed" : "login failed";
         try {
           const data = await r.json();
           message = data?.error?.message || message;

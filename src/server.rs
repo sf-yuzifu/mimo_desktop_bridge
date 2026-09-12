@@ -175,6 +175,14 @@ fn err_json(status: StatusCode, message: &str, code: &str) -> Response {
 
 // ── admin session cookies ────────────────────────────────────────────
 
+/// True when the server is reachable beyond loopback (LAN / 0.0.0.0 bind).
+fn exposed_non_loopback(state: &BridgeState) -> bool {
+    state
+        .bound_addr()
+        .map(|a| !a.ip().is_loopback())
+        .unwrap_or(false)
+}
+
 fn session_cookie(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
     raw.split(';').find_map(|kv| {
@@ -189,9 +197,12 @@ fn session_cookie(headers: &HeaderMap) -> Option<String> {
 }
 
 fn admin_ok(state: &BridgeState, headers: &HeaderMap) -> bool {
-    // If admin password is not configured yet, control plane is open (localhost first-run).
     if !state.storage.admin_configured() {
-        return true;
+        // First run: open only on loopback binds. On exposed binds the
+        // setup/login gate stays reachable, everything else is locked until
+        // an admin password is created — otherwise anyone on the LAN could
+        // claim admin (or drive the Xiaomi login) first.
+        return !exposed_non_loopback(state);
     }
     let Some(tok) = session_cookie(headers) else {
         return false;
@@ -271,8 +282,33 @@ pub fn router(state: Arc<BridgeState>) -> Router {
 
     api.merge(proxy)
         .fallback(static_asset)
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer(&state))
         .with_state(state)
+}
+
+/// Same-origin by default. Only origins explicitly listed in settings get
+/// CORS headers — a permissive default would let any website drive the
+/// local /v1 bridge from the browser.
+fn cors_layer(state: &BridgeState) -> CorsLayer {
+    use axum::http::{HeaderValue, Method};
+    let origins: Vec<HeaderValue> = state
+        .storage
+        .settings()
+        .cors_origins
+        .iter()
+        .filter_map(|o| o.trim().parse().ok())
+        .collect();
+    if origins.is_empty() {
+        return CorsLayer::new();
+    }
+    CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([Method::GET, Method::POST, Method::DELETE])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::HeaderName::from_static("x-api-key"),
+        ])
 }
 
 /// Paths that must stay reachable without an admin session.
@@ -283,16 +319,14 @@ fn admin_open_path(path: &str) -> bool {
     )
 }
 
-/// Once an admin password is set, everything under /api (except the login
-/// gate itself) requires a valid mdb_session cookie.
+/// Once an admin password is set (or the bind is exposed beyond loopback),
+/// everything under /api (except the login/setup gate itself) requires a
+/// valid mdb_session cookie.
 async fn admin_guard(
     State(state): State<Arc<BridgeState>>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    if !state.storage.admin_configured() {
-        return next.run(req).await;
-    }
     let path = req.uri().path();
     if admin_open_path(path) {
         return next.run(req).await;
@@ -344,9 +378,10 @@ async fn static_asset(
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 
-    // Admin gate: when a password is set, the full WebUI (and its assets)
-    // stay hidden until unlock. /v1 is unaffected (separate router).
-    if state.storage.admin_configured() && !admin_ok(&state, &headers) {
+    // Admin gate: full WebUI (and its assets) stay hidden until unlock —
+    // or, on an exposed bind, until the first-run admin password exists.
+    // /v1 is unaffected (separate router).
+    if !admin_ok(&state, &headers) {
         return match Assets::get("login.html") {
             Some(f) => (
                 [(header::CONTENT_TYPE, "text/html; charset=utf-8")],

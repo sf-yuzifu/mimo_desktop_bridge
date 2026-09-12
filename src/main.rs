@@ -116,6 +116,15 @@ async fn main() -> anyhow::Result<()> {
             println!("  sid:      {}", mimo_desktop_bridge_lib::auth::SID);
             println!("  upstream: {}", mimo_desktop_bridge_lib::auth::API_BASE);
 
+            if !host.is_loopback() && !storage.admin_configured() {
+                eprintln!();
+                eprintln!("WARNING: listening on {host} with NO admin password set.");
+                eprintln!(
+                    "         The control plane is locked until you create one — open {} now.",
+                    server.webui_url()
+                );
+            }
+
             if open {
                 let _ = open::that(server.webui_url());
             }

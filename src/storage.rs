@@ -27,6 +27,11 @@ pub struct Settings {
     pub tls_cert_path: Option<String>,
     #[serde(default)]
     pub tls_key_path: Option<String>,
+    /// Extra allowed CORS origins (e.g. "http://localhost:3000").
+    /// Empty (default) = no CORS headers = same-origin only. A permissive
+    /// default would let any website call the local /v1 from the browser.
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
 }
 
 fn default_port() -> u16 {
@@ -42,6 +47,7 @@ impl Default for Settings {
             tls_enabled: false,
             tls_cert_path: None,
             tls_key_path: None,
+            cors_origins: Vec::new(),
         }
     }
 }
