@@ -17,7 +17,6 @@ Free-channel models include `mimo-x-pro-preview`, `mimo-x-flash-preview`, `mimo-
 ## Quick start
 
 ```bash
-cd mimo_desktop_bridge
 cargo run --release -- server --open
 ```
 
@@ -103,11 +102,37 @@ Open `http://<host>:8787` and sign in. Session persists in the `/data` volume.
 
 `nonce` is parsed from **raw** JSON text (JSON number precision would truncate it).
 
+## Develop / release
+
+```bash
+# local check
+cargo check --all-targets && cargo test
+
+# stage binaries under release/
+scripts/build-binaries.sh
+
+# cross-compile (example)
+MDB_RUST_TARGET=aarch64-unknown-linux-musl scripts/build-binaries.sh
+```
+
+This repository is **self-contained** (crate + WebUI + Docker + OpenWrt + GitHub Actions live here).
+
+| Workflow | Trigger | Output |
+|---|---|---|
+| `.github/workflows/ci.yml` | push / PR | `cargo check` + `cargo test` |
+| `.github/workflows/release.yml` | tag `v*` / manual | draft Release with macOS / Windows / Linux archives |
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+OpenWrt packaging: see `openwrt/README.md` (`build-ipk.sh` / `pack-bundle.sh`).
+
 ## Related
 
-- `mimo-free-bridge/` — Node prototype used to reverse this protocol
-- `miclaw_api_bridge/` — Super XiaoAI bridge (different product; not merged on purpose)
+- `miclaw_api_bridge` — Super XiaoAI bridge (different upstream; not merged on purpose)
 
 ## License
 
-MIT (same spirit as miclaw_api_bridge). Use at your own risk; respect Xiaomi ToS.
+MIT — see [LICENSE](LICENSE). Use at your own risk; respect Xiaomi ToS.

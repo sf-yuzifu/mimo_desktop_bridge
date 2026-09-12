@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Build release binaries and stage them under release/.
+# Run from the crate root (this repo root when published standalone).
+#
 # Usage:
 #   scripts/build-binaries.sh
 # Env:
@@ -24,7 +26,7 @@ else
 fi
 
 mkdir -p "$OUT_DIR"
-cd "$ROOT/mimo_desktop_bridge"
+cd "$ROOT"
 
 if [ "${#TARGET_ARGS[@]}" -gt 0 ]; then
   cargo build --release "${TARGET_ARGS[@]}" --bin mimo_desktop_bridge
@@ -32,7 +34,7 @@ else
   cargo build --release --bin mimo_desktop_bridge
 fi
 
-target_dir="$ROOT/mimo_desktop_bridge/target"
+target_dir="$ROOT/target"
 if [ -n "${MDB_RUST_TARGET:-}" ]; then
   target_dir="$target_dir/$MDB_RUST_TARGET"
 fi
