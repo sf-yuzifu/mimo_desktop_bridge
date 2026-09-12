@@ -22,15 +22,29 @@ iframe 嵌入自带 WebUI。产品形态对齐 `miclaw_api_bridge/openwrt`。
 
 ## 交叉编译 aarch64-musl
 
-在 Linux / macOS 开发机上（需要 Docker + rustup target）：
+在 Linux / macOS 开发机上（需要 Docker）：
+
+```bash
+bash openwrt/build-openwrt.sh
+# 产物: openwrt/out/mimo_desktop_bridge
+```
+
+或手动：
 
 ```bash
 rustup target add aarch64-unknown-linux-musl
-# 或使用 cross
-cross build --release --target aarch64-unknown-linux-musl
+cross build --release --target aarch64-unknown-linux-musl --bin mimo_desktop_bridge
 ```
 
 产物：`target/aarch64-unknown-linux-musl/release/mimo_desktop_bridge`
+
+## 自动 CI
+
+推送 `v*` tag 或手动触发 `.github/workflows/openwrt.yml`，会产出：
+
+- `mimo_desktop_bridge_v*_openwrt_aarch64.tar.gz` — 手动安装包
+- `luci-app-mimo-desktop-bridge_*_aarch64_cortex-a53.ipk` — OpenWrt 24.10 `opkg install`
+- `luci-app-mimo-desktop-bridge-*-r1.apk` — OpenWrt 25.12+ `apk add`
 
 ## 手动安装（无包管理器）
 

@@ -121,6 +121,7 @@ This repository is **self-contained** (crate + WebUI + Docker + OpenWrt + GitHub
 |---|---|---|
 | `.github/workflows/ci.yml` | push / PR | `cargo check` + `cargo test` |
 | `.github/workflows/release.yml` | tag `v*` / manual | draft Release with macOS / Windows / Linux archives |
+| `.github/workflows/openwrt.yml` | tag `v*` / manual | aarch64-musl binary + tar bundle + `.ipk` + `.apk` |
 
 ```bash
 git tag v0.1.0
