@@ -224,7 +224,7 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
     };
 
     let message_id = format!("msg_{}", Uuid::new_v4().simple());
-    let mut upstream = resp.bytes_stream();
+    let upstream = resp.bytes_stream();
     let state2 = state.clone();
     let model2 = model.clone();
     let mid = message_id.clone();

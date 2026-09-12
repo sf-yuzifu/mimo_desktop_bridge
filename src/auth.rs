@@ -260,7 +260,7 @@ fn nonempty_loc(s: Option<&str>) -> Option<String> {
 
 async fn follow_redirs(
     client: &reqwest::Client,
-    mut url: String,
+    url: String,
     cookie_header: &str,
     ua: &str,
 ) -> Result<(String, reqwest::Response)> {
@@ -321,7 +321,7 @@ pub async fn login_auth2(
     }
 
     let resp = {
-        let mut r = client
+        let r = client
             .post(AUTH2)
             .header(reqwest::header::USER_AGENT, LOGIN_UA)
             .form(&form);
@@ -537,7 +537,7 @@ pub async fn verify_ticket(
         .send()
         .await
         .map_err(|e| BridgeError::Login(format!("verifyTicket: {e}")))?;
-    let mut cookie = merge_set_cookie(cookie_header, &set_cookies_from_headers(resp.headers()));
+    let cookie0 = merge_set_cookie(cookie_header, &set_cookies_from_headers(resp.headers()));
     // verifyPhone sometimes 302s — walk the chain so identity cookies land
     let (mut cookie, resp) = if resp.status().is_redirection() {
         let loc = nonempty_loc(
@@ -546,11 +546,11 @@ pub async fn verify_ticket(
                 .and_then(|v| v.to_str().ok()),
         );
         match loc {
-            Some(loc) => follow_redirs(client, loc, &cookie, LOGIN_UA).await?,
-            None => (cookie, resp),
+            Some(loc) => follow_redirs(client, loc, &cookie0, LOGIN_UA).await?,
+            None => (cookie0, resp),
         }
     } else {
-        (cookie, resp)
+        (cookie0, resp)
     };
     let text = resp.text().await?;
     let body: serde_json::Value = serde_json::from_str(strip_prefix(&text))

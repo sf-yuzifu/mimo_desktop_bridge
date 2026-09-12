@@ -490,13 +490,11 @@ async fn responses_stream_from_chat(
         usage_state.record_tokens(&model_for_usage, p, c);
 
         if reasoning_opened && !reasoning_closed {
-            reasoning_closed = true;
             for evt in close_reasoning(&rs_id, &reasoning, &mut seq) {
                 send(&tx, evt).await;
             }
         }
         if !message_opened {
-            message_opened = true;
             msg_index = if reasoning_opened { 1 } else { 0 };
             send(
                 &tx,
