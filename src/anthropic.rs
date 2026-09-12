@@ -486,3 +486,88 @@ pub async fn messages(State(state): State<Arc<BridgeState>>, body: String) -> Re
     }))
     .into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requires_model_and_messages() {
+        assert!(anthropic_to_openai(&json!({})).is_err());
+        assert!(anthropic_to_openai(&json!({"model": "m"})).is_err());
+    }
+
+    #[test]
+    fn system_string_becomes_system_message() {
+        let out = anthropic_to_openai(&json!({
+            "model": "m",
+            "system": "be nice",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .unwrap();
+        let msgs = out["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[0]["content"], "be nice");
+        assert_eq!(msgs[1]["role"], "user");
+        assert_eq!(out["stream"], true);
+    }
+
+    #[test]
+    fn system_array_blocks_joined() {
+        let out = anthropic_to_openai(&json!({
+            "model": "m",
+            "system": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}],
+            "messages": []
+        }))
+        .unwrap();
+        assert_eq!(out["messages"][0]["content"], "a\nb");
+    }
+
+    #[test]
+    fn defaults_max_tokens_and_maps_options() {
+        let out = anthropic_to_openai(&json!({
+            "model": "m",
+            "messages": [],
+            "temperature": 0.3,
+            "top_p": 0.9,
+            "stop_sequences": ["END"]
+        }))
+        .unwrap();
+        assert_eq!(out["max_tokens"], 4096);
+        assert_eq!(out["temperature"], 0.3);
+        assert_eq!(out["top_p"], 0.9);
+        assert_eq!(out["stop"], json!(["END"]));
+        assert_eq!(out["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn content_parts_text_thinking_tool_result() {
+        let out = anthropic_to_openai(&json!({
+            "model": "m",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "T"},
+                    {"type": "thinking", "thinking": "H"},
+                    {"type": "tool_result", "content": "R"}
+                ]
+            }]
+        }))
+        .unwrap();
+        assert_eq!(out["messages"][0]["content"], "T\nH\nR");
+    }
+
+    #[test]
+    fn tool_result_object_content_stringified() {
+        let out = anthropic_to_openai(&json!({
+            "model": "m",
+            "messages": [{
+                "role": "tool",
+                "content": [{"type": "tool_result", "content": {"ok": true}}]
+            }]
+        }))
+        .unwrap();
+        assert_eq!(out["messages"][0]["role"], "tool");
+        assert!(out["messages"][0]["content"].as_str().unwrap().contains("ok"));
+    }
+}

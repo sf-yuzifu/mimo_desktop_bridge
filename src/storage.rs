@@ -286,3 +286,17 @@ pub fn ct_eq(a: &str, b: &str) -> bool {
     }
     a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ct_eq_matches() {
+        assert!(ct_eq("abc", "abc"));
+        assert!(ct_eq("", ""));
+        assert!(!ct_eq("abc", "abd"));
+        assert!(!ct_eq("abc", "ab"));
+        assert!(!ct_eq("abc", "abcd"));
+    }
+}

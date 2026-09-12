@@ -924,3 +924,118 @@ pub async fn probe_me(client: &reqwest::Client, session: &Session) -> Result<(u1
         .unwrap_or(false);
     Ok((status, logged_in, text.chars().take(200).collect()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn md5_upper_known_vector() {
+        assert_eq!(md5_upper("abc"), "900150983CD24FB0D6963F7D28E17F72");
+    }
+
+    #[test]
+    fn strip_prefix_removes_marker() {
+        assert_eq!(strip_prefix("&&&START&&&{\"code\":0}"), "{\"code\":0}");
+        assert_eq!(strip_prefix("{\"code\":0}"), "{\"code\":0}");
+    }
+
+    #[test]
+    fn extract_raw_number_keeps_u64_precision() {
+        // serde_json would truncate this to f64; raw text keeps all digits.
+        let s = r#"{"code":0,"nonce":1234567890123456789,"ssecurity":"x"}"#;
+        assert_eq!(extract_raw_number(s, "nonce"), Some("1234567890123456789".into()));
+    }
+
+    #[test]
+    fn extract_raw_number_edge_cases() {
+        assert_eq!(extract_raw_number(r#"{"nonce":-42}"#, "nonce"), Some("-42".into()));
+        assert_eq!(extract_raw_number(r#"{"nonce":"abc"}"#, "nonce"), None);
+        assert_eq!(extract_raw_number(r#"{"other":1}"#, "nonce"), None);
+        assert_eq!(extract_raw_number("", "nonce"), None);
+    }
+
+    #[test]
+    fn parse_cookie_header_pairs() {
+        let m = parse_cookie_header("a=1; b=2;broken; c=x=y");
+        assert_eq!(m.get("a").map(String::as_str), Some("1"));
+        assert_eq!(m.get("b").map(String::as_str), Some("2"));
+        assert_eq!(m.get("c").map(String::as_str), Some("x=y"));
+        assert!(!m.contains_key("broken"));
+    }
+
+    #[test]
+    fn merge_set_cookie_add_replace_delete() {
+        let c1 = merge_set_cookie("", &["a=1; Path=/; HttpOnly".into()]);
+        assert_eq!(c1, "a=1");
+        let c2 = merge_set_cookie(&c1, &["a=2; Path=/".into(), "b=3".into()]);
+        assert!(c2.contains("a=2") && c2.contains("b=3") && !c2.contains("a=1"));
+        // Empty value deletes
+        let c3 = merge_set_cookie("a=1; b=2", &["a=; Max-Age=0".into()]);
+        assert_eq!(c3, "b=2");
+        // "deleted" value deletes
+        let c4 = merge_set_cookie("a=1", &["a=deleted; Path=/".into()]);
+        assert_eq!(c4, "");
+    }
+
+    #[test]
+    fn merge_set_cookie_sanitizes_illegal_bytes() {
+        let dirty = "tok=va\u{7f}lue; Path=/";
+        let c = merge_set_cookie("", &[dirty.into()]);
+        assert_eq!(c, "tok=value");
+    }
+
+    #[test]
+    fn safe_cookie_header_rejects_crlf() {
+        assert_eq!(safe_cookie_header("a=1"), Some("a=1".into()));
+        assert_eq!(safe_cookie_header("a=1\r\nX: y"), Some("a=1X: y".into()));
+        assert_eq!(safe_cookie_header(""), None);
+        assert_eq!(safe_cookie_header("   "), None);
+    }
+
+    #[test]
+    fn url_form_encode_rfc3986_unreserved() {
+        assert_eq!(url_form_encode("abc-_.~XYZ09"), "abc-_.~XYZ09");
+        assert_eq!(url_form_encode("a b+c"), "a%20b%2Bc");
+        assert_eq!(url_form_encode("nonce=1&x"), "nonce%3D1%26x");
+    }
+
+    #[test]
+    fn sha1_base64_known_vector() {
+        assert_eq!(sha1_base64("abc"), "qZk+NkcGgWq6PiVxeFDCbJzQ2J0=");
+    }
+
+    #[test]
+    fn stable_device_id_is_deterministic() {
+        let a = stable_device_id(Some("12345"));
+        let b = stable_device_id(Some("12345"));
+        assert_eq!(a, b);
+        assert!(a.starts_with("pc_"));
+        assert_ne!(a, stable_device_id(Some("other")));
+    }
+
+    #[test]
+    fn two_factor_paths_flags() {
+        assert_eq!(two_factor_paths(4).1, "/identity/auth/verifyPhone");
+        assert_eq!(two_factor_paths(8).1, "/identity/auth/verifyEmail");
+    }
+
+    #[test]
+    fn session_business_cookie_shape() {
+        let s = Session {
+            user_id: Some("42".into()),
+            c_user_id: Some("c42".into()),
+            pass_token: None,
+            ssecurity: None,
+            service_token: Some("tok".into()),
+            nick: None,
+            refreshed_at: None,
+        };
+        let c = s.business_cookie();
+        assert!(c.contains("serviceToken=tok"));
+        assert!(c.contains("mimopc_serviceToken=tok"));
+        assert!(c.contains("userId=42"));
+        assert!(c.contains("cUserId=c42"));
+        assert!(s.is_authenticated());
+    }
+}

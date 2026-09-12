@@ -313,3 +313,27 @@ pub async fn proxy_status(State(state): State<Arc<BridgeState>>) -> Response {
     }))
     .into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_models_shape() {
+        let models = known_models();
+        assert!(models.len() >= 5);
+        let ids: Vec<&str> = models.iter().filter_map(|m| m["id"].as_str()).collect();
+        assert!(ids.contains(&"mimo-x-pro-preview"));
+        assert!(ids.contains(&"mimo-auto"));
+        for m in &models {
+            assert_eq!(m["object"], "model");
+            assert_eq!(m["owned_by"], "xiaomi");
+        }
+    }
+
+    #[test]
+    fn error_response_shape() {
+        let resp = error_response(StatusCode::BAD_REQUEST, "boom", "bad");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+}
