@@ -30,6 +30,20 @@ const REFRESH_DEDUP_MS: i64 = 60_000;
 impl BridgeState {
     pub fn new(storage: Arc<Storage>) -> Self {
         let usage = Arc::new(Usage::load(storage.config_dir()));
+        // Debounced persistence: counters update in memory, disk writes batch
+        // to at most one per interval (slow flash on routers appreciates this).
+        tokio::spawn({
+            let usage = usage.clone();
+            async move {
+                let mut tick =
+                    tokio::time::interval(std::time::Duration::from_secs(5));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    usage.flush();
+                }
+            }
+        });
         let logs = Arc::new(LogHub::new(200));
         let http = reqwest::Client::builder()
             .gzip(true)

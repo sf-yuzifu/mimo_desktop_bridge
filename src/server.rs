@@ -57,6 +57,7 @@ impl HttpServer {
 
     pub async fn shutdown(self) {
         self.state.clear_bound_addr();
+        self.state.usage.flush();
         self.task.abort();
     }
 }
